@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /home/kokochea/vhs-recorder -name .* -type f)",
+      "Bash(python3:*)",
+      "Bash(ffmpeg -version)",
+      "Bash(v4l2-ctl:*)",
+      "Read(//mnt/vhs-disk/**)",
+      "Bash(touch /mnt/vhs-disk/vhs-captures/.write_test)",
+      "Bash(rm /mnt/vhs-disk/vhs-captures/.write_test)",
+      "Bash(arecord -l)",
+      "Bash(arecord --list-pcms)",
+      "Bash(sudo usermod:*)",
+      "Read(//dev/**)",
+      "Read(//proc/asound/**)",
+      "Bash(touch /mnt/vhs-disk/vhs-captures/test_write)",
+      "Bash(rm /mnt/vhs-disk/vhs-captures/test_write)",
+      "Bash(sudo v4l2-ctl:*)",
+      "Bash(cat /proc/asound/card0/stream*)",
+      "Bash(lsusb)",
+      "Bash(dpkg -l libasound2)",
+      "Bash(lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,LABEL,UUID)",
+      "Read(//etc/**)",
+      "Read(//mnt/**)",
+      "Bash(lsblk:*)",
+      "Bash(sudo blkid:*)",
+      "Bash(blkid /dev/sdb1)",
+      "Bash(gh auth:*)",
+      "Bash(git --version)"
+    ]
+  }
+}

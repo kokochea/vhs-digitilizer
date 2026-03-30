@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VHS Recorder</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #eee; min-height: 100vh; }
+    header { background: #1a1a1a; padding: 16px 24px; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 20px; font-weight: 600; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #555; flex-shrink: 0; }
+    .dot.recording  { background: #ef4444; animation: pulse 1s infinite; }
+    .dot.blank      { background: #f59e0b; }
+    .dot.processing { background: #3b82f6; animation: pulse .5s infinite; }
+    .dot.idle       { background: #555; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .container { max-width: 900px; margin: 0 auto; padding: 24px; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .card h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: #888; margin-bottom: 16px; }
+    .status-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+    .badge { padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 500; }
+    .badge.recording  { background: #7f1d1d; color: #fca5a5; }
+    .badge.blank      { background: #78350f; color: #fcd34d; }
+    .badge.processing { background: #1e3a5f; color: #93c5fd; }
+    .badge.idle       { background: #1f2937; color: #9ca3af; }
+    .message { font-size: 14px; color: #aaa; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 16px; }
+    .stat { background: #111; border-radius: 8px; padding: 14px; text-align: center; }
+    .stat-value { font-size: 28px; font-weight: 700; color: #fff; }
+    .stat-label { font-size: 12px; color: #666; margin-top: 4px; }
+    .preview-wrap { margin-top: 16px; border-radius: 8px; overflow: hidden; background: #111; text-align: center; min-height: 120px; }
+    .preview-wrap img { width: 100%; max-width: 640px; border-radius: 8px; display: block; margin: 0 auto; }
+    .detect-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; font-size: 13px; color: #888; align-items: center; }
+    .detect-item strong { color: #ccc; }
+    .cut-reason { flex-basis: 100%; color: #f97316; }
+    .cut-reason strong { color: #fb923c; }
+    .preview-wrap p { color: #555; font-size: 12px; padding: 8px; }
+    .btn { padding: 10px 24px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; transition: opacity .15s; }
+    .btn:hover { opacity: .85; }
+    .btn-start   { background: #16a34a; color: #fff; }
+    .btn-stop    { background: #dc2626; color: #fff; }
+    .btn-preview { background: #374151; color: #d1d5db; }
+    .btn-preview.active { background: #1d4ed8; color: #fff; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+    .vu-bar-wrap { display:inline-block; width:60px; height:8px; background:#222; border-radius:4px; overflow:hidden; position:relative; vertical-align:middle; }
+    .vu-bar-fill { position:absolute; top:0; left:0; height:100%; width:0%; transition:width .2s; background:#22c55e; }
+    .det-score { color:#a78bfa; font-weight:600; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; color: #666; font-weight: 500; padding: 8px 12px; border-bottom: 1px solid #2a2a2a; }
+    td { padding: 10px 12px; border-bottom: 1px solid #1f1f1f; }
+    tr:hover td { background: #222; }
+    .play-btn { padding: 4px 12px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .dl-btn   { padding: 4px 12px; background: #374151; color: #d1d5db; text-decoration: none; border-radius: 6px; font-size: 12px; display: inline-block; }
+    .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 100; align-items: center; justify-content: center; }
+    .modal.open { display: flex; }
+    .modal-inner { background: #1a1a1a; border-radius: 12px; padding: 20px; max-width: 860px; width: 95%; }
+    .modal-inner video { width: 100%; border-radius: 8px; }
+    .modal-close { float: right; background: none; border: none; color: #aaa; font-size: 20px; cursor: pointer; margin-bottom: 10px; }
+    .empty { color: #555; text-align: center; padding: 32px; font-size: 14px; }
+    .lib-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+    .lib-header h2 { margin-bottom: 0; }
+    .lib-controls { display: flex; gap: 6px; align-items: center; }
+    .view-toggle { display: flex; gap: 4px; }
+    .view-btn { padding: 5px 10px; border-radius: 6px; border: 1px solid #333; background: #111; color: #888; cursor: pointer; font-size: 13px; }
+    .view-btn.active { background: #2a2a2a; color: #fff; border-color: #555; }
+    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+    .gallery-card { background: #111; border-radius: 10px; overflow: hidden; border: 1px solid #2a2a2a; transition: border-color .15s; }
+    .gallery-card:hover { border-color: #444; }
+    .gallery-card.selected { border-color: #3b82f6; }
+    .gallery-thumb { position: relative; background: #000; aspect-ratio: 16/9; overflow: hidden; }
+    .gallery-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .gallery-thumb .thumb-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.4); opacity: 0; transition: opacity .15s; cursor: pointer; font-size: 36px; }
+    .gallery-card:hover .thumb-play { opacity: 1; }
+    .gallery-card.selected .thumb-play { opacity: 1; background: rgba(59,130,246,.25); }
+    .gallery-info { padding: 10px 12px; }
+    .gallery-name { font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
+    .gallery-meta { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #666; }
+    .gallery-duration { font-size: 13px; font-weight: 600; color: #fff; }
+    .gallery-actions { display: flex; gap: 6px; margin-top: 8px; }
+    .del-btn { padding: 4px 10px; background: #7f1d1d; color: #fca5a5; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .del-btn:hover { background: #991b1b; }
+    input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; accent-color: #3b82f6; }
+    .bulk-bar { display: none; position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 12px 20px; display: flex; align-items: center; gap: 12px; font-size: 14px; z-index: 50; box-shadow: 0 4px 20px rgba(0,0,0,.6); }
+    .bulk-bar.hidden { display: none !important; }
+    .bulk-count { color: #9ca3af; white-space: nowrap; }
+    .bulk-del { padding: 7px 16px; background: #dc2626; color: #fff; border: none; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .bulk-del:hover { background: #b91c1c; }
+    .bulk-zip { padding: 7px 16px; background: #2563eb; color: #fff; border: none; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .bulk-zip:hover { background: #1d4ed8; }
+    .bulk-clear { padding: 7px 12px; background: none; color: #6b7280; border: none; cursor: pointer; font-size: 13px; }
+    .cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 600px) { .cfg-grid { grid-template-columns: 1fr; } }
+    .cfg-group { background: #111; border-radius: 8px; padding: 16px; }
+    .cfg-group h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #666; margin-bottom: 14px; }
+    .cfg-row { margin-bottom: 14px; }
+    .cfg-row:last-child { margin-bottom: 0; }
+    .cfg-label { display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #ccc; margin-bottom: 6px; }
+    .cfg-label span { color: #fff; font-weight: 600; font-size: 13px; }
+    .cfg-desc { font-size: 11px; color: #555; margin-bottom: 6px; }
+    input[type=range] { width: 100%; accent-color: #3b82f6; cursor: pointer; }
+    select.cfg-select { width: 100%; background: #1a1a1a; color: #eee; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+    .cfg-toggle { display: flex; align-items: center; gap: 10px; }
+    .toggle-switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; inset: 0; background: #374151; border-radius: 22px; cursor: pointer; transition: .2s; }
+    .toggle-slider:before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; }
+    .toggle-switch input:checked + .toggle-slider { background: #3b82f6; }
+    .toggle-switch input:checked + .toggle-slider:before { transform: translateX(18px); }
+    .cfg-save { display: flex; align-items: center; gap: 12px; margin-top: 20px; }
+    .cfg-notice { font-size: 12px; color: #6b7280; }
+    .cfg-saved { font-size: 12px; color: #22c55e; display: none; }
+    .card-collapsible-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; margin-bottom: 16px; }
+    .card-collapsible-header h2 { margin-bottom: 0; }
+    .card-collapsible-header .lib-header { margin-bottom: 0; flex: 1; }
+    .card-toggle { background: none; border: none; color: #555; font-size: 16px; cursor: pointer; padding: 0 2px; transition: transform .2s; flex-shrink: 0; }
+    .card-toggle.collapsed { transform: rotate(-90deg); }
+    .card-body.collapsed { display: none; }
+    .det-audio { color: #10b981; }
+    .det-audio.silent { color: #f59e0b; }
+    .cut-progress-wrap { flex-basis: 100%; margin-top: 4px; display: none; }
+    .cut-progress-label { font-size: 12px; color: #f97316; margin-bottom: 3px; }
+    progress.cut-bar { width: 100%; height: 5px; border-radius: 3px; accent-color: #f97316; }
+    #disk-info { font-size: 12px; color: #555; margin-left: auto; }
+    .btn-cut { background: #92400e; color: #fcd34d; }
+    .btn-cut:hover { background: #b45309; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="dot idle" id="dot"></div>
+  <h1>📼 VHS Recorder</h1>
+  <span id="disk-info"></span>
+</header>
+
+<div class="container">
+  <div class="card">
+    <h2>Estado</h2>
+    <div class="status-row">
+      <span class="badge idle" id="badge">Idle</span>
+      <span class="message" id="message">Cargando...</span>
+    </div>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value" id="seg-found">0</div>
+        <div class="stat-label">Segmentos detectados</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" id="seg-duration">—</div>
+        <div class="stat-label">Duración segmento actual</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" id="seg-saved">0</div>
+        <div class="stat-label">Segmentos guardados</div>
+      </div>
+    </div>
+    <div class="preview-wrap">
+      <img src="/preview_feed" id="preview-img" alt="preview">
+      <p>Preview en vivo (se activa al iniciar)</p>
+    </div>
+    <div class="detect-row">
+      <span class="detect-item" title="Brillo medio del frame (negro si &lt; umbral)">Brillo: <strong id="det-mean">—</strong></span>
+      <span class="detect-item" title="Varianza del frame (estática si &gt; umbral y brillo &lt; 80)">Varianza: <strong id="det-var">—</strong></span>
+      <span class="detect-item" title="Diferencia media entre frames consecutivos (congelado si &lt; umbral)">Diff: <strong id="det-diff">—</strong></span>
+      <span class="detect-item" id="det-vu-row" style="display:none" title="Nivel RMS de audio en tiempo real">
+        Audio: <span class="vu-bar-wrap"><span class="vu-bar-fill" id="det-vu-fill"></span></span>
+        <strong id="det-vu-db" style="margin-left:5px">—</strong>
+      </span>
+      <span class="detect-item" id="det-score-row" style="display:none" title="Score combinado video+audio (≥0.75 = inactivo → posible corte)">Score: <strong class="det-score" id="det-score">—</strong></span>
+      <span class="detect-item cut-reason" id="cut-reason-row" style="display:none">Último corte: <strong id="cut-reason">—</strong></span>
+      <div class="cut-progress-wrap" id="cut-progress-wrap">
+        <div class="cut-progress-label" id="cut-progress-label">Cortando en…</div>
+        <progress class="cut-bar" id="cut-bar" max="100" value="0"></progress>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-start"   id="btn-start"   onclick="startRecording()">▶ Iniciar</button>
+      <button class="btn btn-stop"    id="btn-stop"    onclick="stopRecording()" disabled>⏹ Detener</button>
+      <button class="btn btn-cut"     id="btn-cut"     onclick="forceCut()" style="display:none">✂ Cortar</button>
+      <button class="btn btn-preview" id="btn-preview" onclick="togglePreview()">👁 Preview</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-collapsible-header" onclick="toggleCard('lib')">
+      <div class="lib-header">
+        <h2>Biblioteca</h2>
+        <div class="lib-controls" onclick="event.stopPropagation()">
+          <div class="view-toggle">
+            <button class="view-btn active" id="btn-view-table" onclick="setView('table')" title="Vista lista">☰ Lista</button>
+            <button class="view-btn"        id="btn-view-gallery" onclick="setView('gallery')" title="Vista galería">⊞ Galería</button>
+          </div>
+        </div>
+      </div>
+      <button class="card-toggle" id="toggle-lib" title="Colapsar/expandir">▾</button>
+    </div>
+    <div class="card-body" id="body-lib">
+      <div id="library-content"><div class="empty">No hay archivos grabados aún.</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-collapsible-header" onclick="toggleCard('cfg')">
+      <h2>Configuración</h2>
+      <button class="card-toggle" id="toggle-cfg" title="Colapsar/expandir">▾</button>
+    </div>
+    <div class="card-body" id="body-cfg">
+    <div class="cfg-grid">
+
+      <div class="cfg-group">
+        <h3>Detección de contenido</h3>
+
+        <div class="cfg-row">
+          <div class="cfg-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="cfg-auto-seg" onchange="onAutoSegChange()">
+              <span class="toggle-slider"></span>
+            </label>
+            <div>
+              <div style="font-size:13px;color:#ccc">Segmentación automática</div>
+              <div class="cfg-desc" style="margin:0">Detecta el fin de contenido y corta en segmentos. Al desactivar graba todo como un archivo.</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="cfg-detection-params">
+          <div class="cfg-row">
+            <div class="cfg-label">Modo de corte</div>
+            <div class="cfg-desc">Cómo detectar el final de un segmento de contenido.</div>
+            <select class="cfg-select" id="cfg-seg-mode" onchange="onModeChange()">
+              <option value="blank">Blank / estática (negro o ruido)</option>
+              <option value="freeze">Frame congelado (imagen quieta)</option>
+              <option value="both">Ambos (cualquiera que ocurra primero)</option>
+              <option value="movie">Película (un archivo, para solo al terminar)</option>
+            </select>
+          </div>
+
+          <div id="cfg-blank-params">
+            <div class="cfg-row">
+              <div class="cfg-label">Umbral de negro <span id="val-black-thresh">15</span></div>
+              <div class="cfg-desc">mean(frame) &lt; N → negro. Subir si no detecta negro real.</div>
+              <input type="range" id="cfg-black-thresh" min="1" max="80" step="1"
+                     oninput="document.getElementById('val-black-thresh').textContent=this.value">
+            </div>
+            <div class="cfg-row">
+              <div class="cfg-label">Umbral de estática <span id="val-static-var">1800</span></div>
+              <div class="cfg-desc">var(frame) &gt; N y mean &lt; 80 → estático. Subir si detecta falsos positivos.</div>
+              <input type="range" id="cfg-static-var" min="100" max="10000" step="100"
+                     oninput="document.getElementById('val-static-var').textContent=this.value">
+            </div>
+            <div class="cfg-row">
+              <div class="cfg-label">Segundos de blank para cortar <span id="val-blank-secs">5</span>s</div>
+              <div class="cfg-desc">Segundos continuos de negro/estática antes de cerrar el segmento.</div>
+              <input type="range" id="cfg-blank-secs" min="1" max="60" step="1"
+                     oninput="document.getElementById('val-blank-secs').textContent=this.value">
+            </div>
+          </div>
+
+          <div id="cfg-movie-params" style="display:none">
+            <div class="cfg-row">
+              <div class="cfg-label">Duración mínima antes de parar <span id="val-movie-min">40</span> min</div>
+              <div class="cfg-desc">No para la grabación hasta que pasen estos minutos de contenido. Evita cortes falsos en escenas estáticas o lentas.</div>
+              <input type="range" id="cfg-movie-min" min="0" max="240" step="5"
+                     oninput="document.getElementById('val-movie-min').textContent=this.value">
+            </div>
+            <div class="cfg-desc" style="color:#f59e0b;margin-top:2px;margin-bottom:10px">
+              ★ Recomendado: blank_secs y freeze_secs en 60s o más para evitar falsos positivos durante la película.
+            </div>
+          </div>
+
+          <div id="cfg-freeze-params">
+            <div class="cfg-row">
+              <div class="cfg-label">Umbral de congelado <span id="val-freeze-threshold">8</span></div>
+              <div class="cfg-desc">Diferencia media de píxel entre frames consecutivos. Menor = más sensible. Recomendado: 5–12.</div>
+              <input type="range" id="cfg-freeze-threshold" min="1" max="50" step="1"
+                     oninput="document.getElementById('val-freeze-threshold').textContent=this.value">
+            </div>
+            <div class="cfg-row">
+              <div class="cfg-label">Segundos congelado para cortar <span id="val-freeze-secs">5</span>s</div>
+              <div class="cfg-desc">Segundos continuos de frame idéntico antes de cerrar el segmento.</div>
+              <input type="range" id="cfg-freeze-secs" min="1" max="60" step="1"
+                     oninput="document.getElementById('val-freeze-secs').textContent=this.value">
+            </div>
+          </div>
+
+          <div class="cfg-row" style="margin-top:14px">
+            <div class="cfg-toggle">
+              <label class="toggle-switch">
+                <input type="checkbox" id="cfg-use-audio" onchange="onAudioSilenceChange()">
+                <span class="toggle-slider"></span>
+              </label>
+              <div>
+                <div style="font-size:13px;color:#ccc">Detección de audio RMS</div>
+                <div class="cfg-desc" style="margin:0">Combina video + audio (score 60/40). Evita cortes en escenas oscuras con audio activo. El VU meter se activa al grabar.</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="cfg-audio-params" style="display:none">
+            <div class="cfg-row">
+              <div class="cfg-label">Umbral de actividad de audio <span id="val-audio-rms-db">-35</span> dBFS</div>
+              <div class="cfg-desc">Audio por encima de este nivel se considera activo (hay contenido). -35 dBFS es un buen valor; subir para ser menos exigente.</div>
+              <input type="range" id="cfg-audio-rms-db" min="-60" max="0" step="1"
+                     oninput="document.getElementById('val-audio-rms-db').textContent=this.value">
+            </div>
+          </div>
+
+          <div class="cfg-row" style="margin-top:14px">
+            <div class="cfg-label">Duración mínima de segmento <span id="val-min-seg-secs">2</span>s</div>
+            <div class="cfg-desc">Segmentos más cortos que esto se descartan al procesar.</div>
+            <input type="range" id="cfg-min-seg-secs" min="1" max="300" step="1"
+                   oninput="document.getElementById('val-min-seg-secs').textContent=this.value">
+          </div>
+        </div>
+      </div>
+
+      <div class="cfg-group">
+        <h3>Codificación <small style="color:#555;font-size:10px;text-transform:none;letter-spacing:0">(próxima grabación)</small></h3>
+
+        <div class="cfg-row">
+          <div class="cfg-label">Calidad de video (CRF) <span id="val-crf">23</span></div>
+          <div class="cfg-desc">Menor = mejor calidad, mayor tamaño de archivo. Recomendado: 20–26.</div>
+          <input type="range" id="cfg-crf" min="15" max="35" step="1"
+                 oninput="document.getElementById('val-crf').textContent=this.value">
+        </div>
+
+        <div class="cfg-row">
+          <div class="cfg-label">Velocidad de codificación</div>
+          <div class="cfg-desc">Más rápido = más CPU, menos compresión.</div>
+          <select class="cfg-select" id="cfg-preset">
+            <option value="ultrafast">ultrafast (menor compresión)</option>
+            <option value="superfast">superfast</option>
+            <option value="veryfast">veryfast</option>
+            <option value="faster">faster</option>
+            <option value="fast">fast (recomendado)</option>
+            <option value="medium">medium (mayor compresión)</option>
+          </select>
+        </div>
+
+        <div class="cfg-row">
+          <div class="cfg-label">Calidad de audio</div>
+          <select class="cfg-select" id="cfg-audio-bitrate">
+            <option value="96k">96 kbps</option>
+            <option value="128k">128 kbps</option>
+            <option value="192k">192 kbps (recomendado)</option>
+            <option value="320k">320 kbps</option>
+          </select>
+        </div>
+
+        <div class="cfg-row">
+          <div class="cfg-label">FPS del preview <span id="val-preview-fps">2</span></div>
+          <div class="cfg-desc">Frames por segundo del stream de vista previa en vivo.</div>
+          <input type="range" id="cfg-preview-fps" min="1" max="10" step="1"
+                 oninput="document.getElementById('val-preview-fps').textContent=this.value">
+        </div>
+
+        <div class="cfg-row">
+          <div class="cfg-label">Threads FFmpeg <span id="val-ffmpeg-threads">0</span></div>
+          <div class="cfg-desc">0 = automático. Reducir (ej: 2–4) para limitar uso de CPU.</div>
+          <input type="range" id="cfg-ffmpeg-threads" min="0" max="16" step="1"
+                 oninput="document.getElementById('val-ffmpeg-threads').textContent=this.value">
+        </div>
+      </div>
+
+    </div>
+    <div class="cfg-save">
+      <button class="btn btn-start" style="padding:8px 20px;font-size:13px" onclick="saveConfig()">Guardar configuración</button>
+      <span class="cfg-notice">Los cambios de detección se aplican de inmediato. Los de codificación, en la próxima grabación.</span>
+      <span class="cfg-saved" id="cfg-saved">✓ Guardado</span>
+    </div>
+    </div><!-- /card-body cfg -->
+  </div>
+</div>
+
+<div class="bulk-bar hidden" id="bulk-bar">
+  <span class="bulk-count" id="bulk-count">0 seleccionados</span>
+  <button class="bulk-zip" onclick="downloadSelected()">↓ Descargar ZIP</button>
+  <button class="bulk-del" onclick="deleteSelected()">🗑 Eliminar</button>
+  <button class="bulk-clear" onclick="clearSelection()" title="Deseleccionar todo">✕</button>
+</div>
+
+<div class="modal" id="modal">
+  <div class="modal-inner">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <video id="modal-video" controls></video>
+  </div>
+</div>
+
+<script>
+const LABELS = {
+  idle:       "Idle",
+  recording:  "Grabando",
+  blank:      "Sin contenido",
+  processing: "Procesando",
+};
+
+function fmtDuration(s) {
+  const m = Math.floor(s / 60), sec = s % 60;
+  return m > 0 ? `${m}m ${sec}s` : `${s}s`;
+}
+
+async function fetchStatus() {
+  try {
+    const d = await (await fetch("/api/status")).json();
+    document.getElementById("dot").className = "dot " + d.status;
+    const badge = document.getElementById("badge");
+    badge.className   = "badge " + d.status;
+    badge.textContent = LABELS[d.status] || d.status;
+    document.getElementById("message").textContent      = d.message;
+    document.getElementById("seg-found").textContent    = d.segments_found;
+    document.getElementById("seg-saved").textContent    = d.segments_saved;
+    document.getElementById("seg-duration").textContent =
+      d.status === "recording" ? fmtDuration(d.current_duration) : "—";
+
+    if (d.detect) {
+      const det   = d.detect;
+      const cfg   = window._lastCfg || {};
+      // Color-code mean based on black_thresh
+      const thresh = cfg.black_thresh || 15;
+      const meanEl = document.getElementById("det-mean");
+      meanEl.textContent  = det.mean;
+      meanEl.style.color  = det.mean < thresh ? "#ef4444" : det.mean < thresh * 2 ? "#f59e0b" : "#22c55e";
+      document.getElementById("det-var").textContent  = det.var;
+      document.getElementById("det-diff").textContent = det.diff;
+      // VU meter
+      if (det.rms_db !== null && det.rms_db !== undefined) {
+        const db  = det.rms_db;
+        const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+        const fill = document.getElementById("det-vu-fill");
+        fill.style.width      = pct + "%";
+        fill.style.background = db > -20 ? "#ef4444" : db > -35 ? "#f59e0b" : "#22c55e";
+        document.getElementById("det-vu-db").textContent  = db.toFixed(1) + " dB";
+        document.getElementById("det-vu-row").style.display   = "";
+        const scoreEl = document.getElementById("det-score");
+        const score   = det.score ?? 0;
+        scoreEl.textContent  = score.toFixed(2);
+        scoreEl.style.color  = score >= 0.75 ? "#ef4444" : score >= 0.5 ? "#f59e0b" : "#a78bfa";
+        document.getElementById("det-score-row").style.display = "";
+      } else {
+        document.getElementById("det-vu-row").style.display    = "none";
+        document.getElementById("det-score-row").style.display = "none";
+      }
+      // Cut countdown bar
+      const blankElapsed  = det.blank_elapsed  || 0;
+      const freezeElapsed = det.freeze_elapsed || 0;
+      const elapsed = Math.max(blankElapsed, freezeElapsed);
+      const limit   = blankElapsed >= freezeElapsed
+                      ? (cfg.blank_secs || 5) : (cfg.freeze_secs || 5);
+      const wrap = document.getElementById("cut-progress-wrap");
+      if (elapsed > 0 && d.status === "recording") {
+        wrap.style.display = "";
+        document.getElementById("cut-bar").value =
+          Math.min(100, (elapsed / limit) * 100);
+        const rem = Math.max(0, limit - elapsed).toFixed(1);
+        document.getElementById("cut-progress-label").textContent =
+          `Cortando en ${rem}s…`;
+      } else {
+        wrap.style.display = "none";
+      }
+    }
+    // Disk info
+    if (d.disk_free_gb !== null && d.disk_free_gb !== undefined) {
+      document.getElementById("disk-info").textContent =
+        `Disco: ${d.disk_free_gb} GB libres / ${d.disk_total_gb} GB`;
+    }
+    // Preview idle button
+    const prevIdle = d.preview_idle ?? false;
+    const btnPrev  = document.getElementById("btn-preview");
+    btnPrev.classList.toggle("active", prevIdle);
+    btnPrev.textContent = prevIdle ? "⏹ Preview" : "👁 Preview";
+    btnPrev.disabled    = d.status !== "idle";
+    // Favicon + title
+    _updateTabIndicator(d.status);
+    if (d.last_cut_reason) {
+      document.getElementById("cut-reason").textContent   = d.last_cut_reason;
+      document.getElementById("cut-reason-row").style.display = "";
+    }
+
+    const busy = d.status !== "idle";
+    document.getElementById("btn-start").disabled = busy;
+    document.getElementById("btn-stop").disabled  =
+      d.status === "idle" || d.status === "processing";
+    document.getElementById("btn-cut").style.display =
+      d.status === "recording" ? "" : "none";
+  } catch (e) {}
+}
+
+let currentView = "table";
+let libraryFiles = [];
+let selected = new Set();
+
+function setView(v) {
+  currentView = v;
+  document.getElementById("btn-view-table").classList.toggle("active", v === "table");
+  document.getElementById("btn-view-gallery").classList.toggle("active", v === "gallery");
+  renderLibrary();
+}
+
+function toggleSelect(name) {
+  if (selected.has(name)) selected.delete(name);
+  else selected.add(name);
+  updateBulkBar();
+  updateSelectionUI();
+}
+
+function clearSelection() {
+  selected.clear();
+  updateBulkBar();
+  updateSelectionUI();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById("bulk-bar");
+  const count = selected.size;
+  if (count === 0) { bar.classList.add("hidden"); return; }
+  bar.classList.remove("hidden");
+  document.getElementById("bulk-count").textContent =
+    count === 1 ? "1 seleccionado" : `${count} seleccionados`;
+}
+
+function updateSelectionUI() {
+  // tabla
+  document.querySelectorAll("tr[data-name]").forEach(tr => {
+    const cb = tr.querySelector("input[type=checkbox]");
+    if (cb) cb.checked = selected.has(tr.dataset.name);
+    tr.classList.toggle("sel", selected.has(tr.dataset.name));
+  });
+  // galería
+  document.querySelectorAll(".gallery-card[data-name]").forEach(card => {
+    const cb = card.querySelector("input[type=checkbox]");
+    const sel = selected.has(card.dataset.name);
+    if (cb) cb.checked = sel;
+    card.classList.toggle("selected", sel);
+    const icon = card.querySelector(".thumb-play");
+    if (icon) icon.textContent = sel ? "✓" : "▶";
+  });
+}
+
+function renderLibrary() {
+  const el = document.getElementById("library-content");
+  if (!libraryFiles.length) {
+    el.innerHTML = '<div class="empty">No hay archivos grabados aún.</div>';
+    return;
+  }
+  if (currentView === "table") {
+    el.innerHTML = `<table>
+      <thead><tr>
+        <th><input type="checkbox" id="chk-all" onchange="toggleAll(this.checked)" title="Seleccionar todo"></th>
+        <th>Archivo</th><th>Duración</th><th>Tamaño</th><th>Fecha</th><th></th>
+      </tr></thead>
+      <tbody>${libraryFiles.map(f => `
+        <tr data-name="${f.name}">
+          <td><input type="checkbox" onchange="toggleSelect('${f.name}')" ${selected.has(f.name) ? "checked" : ""}></td>
+          <td>${f.name}</td>
+          <td>${fmtDuration(f.duration)}</td>
+          <td>${f.size_mb} MB</td>
+          <td>${f.date}</td>
+          <td style="display:flex;gap:6px;align-items:center;">
+            <button class="play-btn" onclick="playVideo('${f.name}')">▶ Ver</button>
+            <a class="dl-btn" href="/download/${f.name}">↓ Descargar</a>
+            <button class="del-btn" onclick="deleteFile('${f.name}')">🗑</button>
+          </td>
+        </tr>`).join("")}
+      </tbody></table>`;
+  } else {
+    el.innerHTML = `<div class="gallery">${libraryFiles.map(f => `
+      <div class="gallery-card${selected.has(f.name) ? " selected" : ""}" data-name="${f.name}">
+        <div class="gallery-thumb" onclick="handleThumbClick('${f.name}')">
+          <img src="/thumbnail/${f.name}" loading="lazy" onerror="this.style.display='none'">
+          <div class="thumb-play">${selected.has(f.name) ? "✓" : "▶"}</div>
+        </div>
+        <div class="gallery-info">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+            <input type="checkbox" onchange="toggleSelect('${f.name}')" ${selected.has(f.name) ? "checked" : ""}>
+            <div class="gallery-name" title="${f.name}" style="margin-bottom:0">${f.name}</div>
+          </div>
+          <div class="gallery-meta">
+            <span class="gallery-duration">${fmtDuration(f.duration)}</span>
+            <span>${f.size_mb} MB</span>
+          </div>
+          <div class="gallery-meta" style="margin-top:2px">${f.date}</div>
+          <div class="gallery-actions">
+            <button class="play-btn" onclick="playVideo('${f.name}')">▶ Ver</button>
+            <a class="dl-btn" href="/download/${f.name}">↓ Descargar</a>
+            <button class="del-btn" onclick="deleteFile('${f.name}')">🗑</button>
+          </div>
+        </div>
+      </div>`).join("")}
+    </div>`;
+  }
+  // sync "select all" checkbox
+  const chkAll = document.getElementById("chk-all");
+  if (chkAll) chkAll.checked = libraryFiles.length > 0 && libraryFiles.every(f => selected.has(f.name));
+}
+
+function toggleAll(checked) {
+  libraryFiles.forEach(f => checked ? selected.add(f.name) : selected.delete(f.name));
+  updateBulkBar();
+  renderLibrary();
+}
+
+function handleThumbClick(name) {
+  if (selected.size > 0) { toggleSelect(name); return; }
+  playVideo(name);
+}
+
+async function deleteFile(name) {
+  if (!confirm(`¿Eliminar "${name}"?`)) return;
+  const r = await fetch(`/api/delete/${name}`, { method: "DELETE" });
+  if ((await r.json()).ok) {
+    selected.delete(name);
+    updateBulkBar();
+    await fetchLibrary();
+  }
+}
+
+async function deleteSelected() {
+  const names = [...selected];
+  if (!names.length) return;
+  if (!confirm(`¿Eliminar ${names.length} archivo(s)?`)) return;
+  await fetch("/api/delete-bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files: names }),
+  });
+  selected.clear();
+  updateBulkBar();
+  await fetchLibrary();
+}
+
+async function downloadSelected() {
+  const names = [...selected];
+  if (!names.length) return;
+  const r = await fetch("/api/download-bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files: names }),
+  });
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "vhs_seleccion.zip"; a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function fetchLibrary() {
+  try {
+    libraryFiles = await (await fetch("/api/library")).json();
+    renderLibrary();
+  } catch (e) {}
+}
+
+function playVideo(name) {
+  document.getElementById("modal-video").src = "/video/" + name;
+  document.getElementById("modal").classList.add("open");
+}
+function closeModal() {
+  document.getElementById("modal").classList.remove("open");
+  document.getElementById("modal-video").src = "";
+}
+
+async function startRecording() {
+  await fetch("/api/start", { method: "POST" });
+}
+async function stopRecording() {
+  await fetch("/api/stop", { method: "POST" });
+}
+async function togglePreview() {
+  const active = document.getElementById("btn-preview").classList.contains("active");
+  await fetch(active ? "/api/preview/stop" : "/api/preview/start", { method: "POST" });
+}
+async function forceCut() {
+  await fetch("/api/cut", { method: "POST" });
+}
+
+// ── Favicon + título de pestaña ────────────────────────────────────────────────
+let _faviconLink = null, _faviconTimer = null, _faviconBlink = false;
+
+function _makeFaviconURL(status, lit) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, 32, 32);
+  // Círculo exterior
+  ctx.fillStyle = status === "recording" ? (lit ? "#ef4444" : "#7f1d1d")
+                : status === "processing" ? "#1d4ed8"
+                : "#374151";
+  ctx.beginPath(); ctx.arc(16, 16, 13, 0, Math.PI * 2); ctx.fill();
+  // Punto central blanco
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.beginPath(); ctx.arc(16, 16, 5, 0, Math.PI * 2); ctx.fill();
+  return c.toDataURL();
+}
+
+function _updateTabIndicator(status) {
+  if (!_faviconLink) {
+    _faviconLink = document.createElement("link");
+    _faviconLink.rel = "icon";
+    document.head.appendChild(_faviconLink);
+  }
+  if (status === "recording") {
+    document.title = "⏺ VHS Recorder";
+    if (!_faviconTimer) {
+      _faviconTimer = setInterval(() => {
+        _faviconBlink = !_faviconBlink;
+        _faviconLink.href = _makeFaviconURL("recording", _faviconBlink);
+      }, 600);
+    }
+  } else {
+    if (_faviconTimer) { clearInterval(_faviconTimer); _faviconTimer = null; }
+    _faviconLink.href = _makeFaviconURL(status, false);
+    document.title = status === "processing" ? "⚙ VHS Recorder" : "📼 VHS Recorder";
+  }
+}
+
+function onAutoSegChange() {
+  const on = document.getElementById("cfg-auto-seg").checked;
+  document.getElementById("cfg-detection-params").style.opacity = on ? "1" : "0.35";
+  document.getElementById("cfg-detection-params").style.pointerEvents = on ? "" : "none";
+  onModeChange();
+}
+
+function onModeChange() {
+  const mode = document.getElementById("cfg-seg-mode").value;
+  const showBlank  = mode !== "freeze";
+  const showFreeze = mode !== "blank";
+  const showMovie  = mode === "movie";
+  document.getElementById("cfg-blank-params").style.display  = showBlank  ? "" : "none";
+  document.getElementById("cfg-freeze-params").style.display = showFreeze ? "" : "none";
+  document.getElementById("cfg-movie-params").style.display  = showMovie  ? "" : "none";
+}
+
+function onAudioSilenceChange() {
+  const on = document.getElementById("cfg-use-audio").checked;
+  document.getElementById("cfg-audio-params").style.display = on ? "" : "none";
+}
+
+function toggleCard(id) {
+  const body   = document.getElementById("body-" + id);
+  const toggle = document.getElementById("toggle-" + id);
+  const nowCollapsed = body.classList.toggle("collapsed");
+  toggle.classList.toggle("collapsed", nowCollapsed);
+  localStorage.setItem("card-" + id + "-collapsed", nowCollapsed);
+}
+
+// Restaurar estado colapsado desde localStorage
+["lib", "cfg"].forEach(id => {
+  if (localStorage.getItem("card-" + id + "-collapsed") === "true") {
+    document.getElementById("body-" + id)?.classList.add("collapsed");
+    document.getElementById("toggle-" + id)?.classList.add("collapsed");
+  }
+});
+
+async function loadConfig() {
+  try {
+    const c = await (await fetch("/api/config")).json();
+    window._lastCfg = c;
+    document.getElementById("cfg-auto-seg").checked           = c.auto_segmentation;
+    document.getElementById("cfg-seg-mode").value             = c.segmentation_mode ?? "blank";
+    document.getElementById("cfg-black-thresh").value         = c.black_thresh;
+    document.getElementById("val-black-thresh").textContent   = c.black_thresh;
+    document.getElementById("cfg-static-var").value           = c.static_var;
+    document.getElementById("val-static-var").textContent     = c.static_var;
+    document.getElementById("cfg-blank-secs").value           = c.blank_secs;
+    document.getElementById("val-blank-secs").textContent     = c.blank_secs;
+    document.getElementById("cfg-freeze-threshold").value     = c.freeze_threshold ?? 8;
+    document.getElementById("val-freeze-threshold").textContent = c.freeze_threshold ?? 8;
+    document.getElementById("cfg-freeze-secs").value          = c.freeze_secs ?? 5;
+    document.getElementById("val-freeze-secs").textContent    = c.freeze_secs ?? 5;
+    document.getElementById("cfg-movie-min").value            = c.movie_min_duration ?? 40;
+    document.getElementById("val-movie-min").textContent      = c.movie_min_duration ?? 40;
+    document.getElementById("cfg-crf").value                  = c.crf;
+    document.getElementById("val-crf").textContent            = c.crf;
+    document.getElementById("cfg-preset").value               = c.preset;
+    document.getElementById("cfg-audio-bitrate").value        = c.audio_bitrate;
+    document.getElementById("cfg-preview-fps").value          = c.preview_fps;
+    document.getElementById("val-preview-fps").textContent    = c.preview_fps;
+    document.getElementById("cfg-ffmpeg-threads").value       = c.ffmpeg_threads ?? 0;
+    document.getElementById("val-ffmpeg-threads").textContent = c.ffmpeg_threads ?? 0;
+    document.getElementById("cfg-use-audio").checked            = c.use_audio ?? false;
+    document.getElementById("cfg-audio-rms-db").value           = c.audio_rms_db ?? -35;
+    document.getElementById("val-audio-rms-db").textContent     = c.audio_rms_db ?? -35;
+    document.getElementById("cfg-min-seg-secs").value           = c.min_segment_secs ?? 2;
+    document.getElementById("val-min-seg-secs").textContent     = c.min_segment_secs ?? 2;
+    onAutoSegChange();
+    onAudioSilenceChange();
+  } catch (e) {}
+}
+
+async function saveConfig() {
+  const payload = {
+    auto_segmentation: document.getElementById("cfg-auto-seg").checked,
+    segmentation_mode: document.getElementById("cfg-seg-mode").value,
+    black_thresh:      parseInt(document.getElementById("cfg-black-thresh").value),
+    static_var:        parseInt(document.getElementById("cfg-static-var").value),
+    blank_secs:        parseInt(document.getElementById("cfg-blank-secs").value),
+    freeze_threshold:    parseInt(document.getElementById("cfg-freeze-threshold").value),
+    freeze_secs:         parseInt(document.getElementById("cfg-freeze-secs").value),
+    movie_min_duration:  parseInt(document.getElementById("cfg-movie-min").value),
+    crf:               parseInt(document.getElementById("cfg-crf").value),
+    preset:            document.getElementById("cfg-preset").value,
+    audio_bitrate:     document.getElementById("cfg-audio-bitrate").value,
+    preview_fps:        parseInt(document.getElementById("cfg-preview-fps").value),
+    ffmpeg_threads:     parseInt(document.getElementById("cfg-ffmpeg-threads").value),
+    use_audio:          document.getElementById("cfg-use-audio").checked,
+    audio_rms_db:       parseInt(document.getElementById("cfg-audio-rms-db").value),
+    min_segment_secs:   parseInt(document.getElementById("cfg-min-seg-secs").value),
+  };
+  window._lastCfg = payload;
+  try {
+    const r = await fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const saved = document.getElementById("cfg-saved");
+      saved.style.display = "inline";
+      setTimeout(() => saved.style.display = "none", 2500);
+    } else {
+      alert((d.errors || [d.msg]).join("\n"));
+    }
+  } catch (e) {}
+}
+
+window._lastCfg = {};
+setInterval(fetchStatus,  1000);
+setInterval(fetchLibrary, 5000);
+fetchStatus();
+fetchLibrary();
+loadConfig();
+</script>
+</body>
+</html>

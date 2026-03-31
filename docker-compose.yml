@@ -1,0 +1,19 @@
+services:
+  vhs-recorder:
+    image: vhs-recorder:latest
+    container_name: vhs-recorder
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/snd:/dev/snd
+    group_add:
+      - video
+      - audio
+    volumes:
+      - /mnt/vhs-disk/vhs-captures:/mnt/vhs-disk/vhs-captures
+      - ./config.json:/app/config.json
+    cpu_shares: 1024
+    ulimits:
+      rtprio: 99

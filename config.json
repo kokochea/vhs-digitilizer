@@ -1,18 +1,18 @@
 {
   "auto_segmentation": true,
-  "segmentation_mode": "movie",
+  "segmentation_mode": "both",
   "black_thresh": 10,
   "static_var": 1800,
-  "blank_secs": 60,
+  "blank_secs": 30,
   "freeze_threshold": 5,
-  "freeze_secs": 60,
-  "movie_min_duration": 135,
+  "freeze_secs": 30,
+  "movie_min_duration": 15,
   "crf": 20,
   "preset": "fast",
   "audio_bitrate": "192k",
   "preview_fps": 5,
   "ffmpeg_threads": 0,
   "use_audio": true,
-  "audio_rms_db": -24,
+  "audio_rms_db": -25,
   "min_segment_secs": 15
 }

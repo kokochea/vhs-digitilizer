@@ -26,7 +26,12 @@
       "Bash(sudo blkid:*)",
       "Bash(blkid /dev/sdb1)",
       "Bash(gh auth:*)",
-      "Bash(git --version)"
+      "Bash(git --version)",
+      "Bash(docker build:*)",
+      "Bash(lspci)",
+      "Bash(vainfo)",
+      "Bash(lscpu)",
+      "Bash(ffmpeg -hide_banner -hwaccels)"
     ]
   }
 }

@@ -255,6 +255,13 @@ def recorder_thread() -> None:
 
     _stop_idle_preview()   # libera el dispositivo V4L2 antes de capturar
 
+    # Descartar frames/sentinels que quedaron de la sesión anterior
+    while not detection_q.empty():
+        try:
+            detection_q.get_nowait()
+        except queue.Empty:
+            break
+
     ts           = datetime.now().strftime("%Y%m%d_%H%M%S")
     session_file = os.path.join(OUTPUT_DIR, f"_session_{ts}.mp4")
     frame_size   = DETECT_W * DETECT_H

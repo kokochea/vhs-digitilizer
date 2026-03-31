@@ -1,5 +1,6 @@
 services:
   vhs-recorder:
+    build: .
     image: vhs-recorder:latest
     container_name: vhs-recorder
     restart: unless-stopped

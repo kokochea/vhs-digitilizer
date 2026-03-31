@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 VIDEO_DEVICE = "/dev/video0"
-AUDIO_DEVICE = "hw:0,0"   # Elgato Cam Link 4K — directo, sin dmix/plugins
+AUDIO_DEVICE = "hw:1,0"   # Elgato Cam Link 4K — directo, sin dmix/plugins
 OUTPUT_DIR  = "/mnt/vhs-disk/vhs-captures"
 THUMB_DIR   = "/tmp/vhs_thumbs"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")

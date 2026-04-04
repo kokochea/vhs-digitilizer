@@ -21,6 +21,7 @@ config = {
     "segmentation_mode":  "blank", # blank | freeze | both | movie
     "black_thresh":        15,     # mean < N → frame negro
     "static_var":          1800,   # var > N && mean < 80 → estático
+    "solid_var":           50,     # var < N && mean > black_thresh → color sólido (ej: pantalla azul VHS)
     "blank_secs":          5,      # segundos de blank/estática para cortar
     "freeze_threshold":    8,      # diff media de píxel < N → frame congelado
     "freeze_secs":         5,      # segundos de frame congelado para cortar
@@ -477,7 +478,8 @@ def recorder_thread() -> None:
                 # (protege contenido oscuro de falsos positivos)
                 effective_thresh = cfg["black_thresh"] * 0.8 if recording else cfg["black_thresh"]
                 detected_blank = (det_mean < effective_thresh
-                                  or (det_var > cfg["static_var"] and det_mean < 80))
+                                  or (det_var > cfg["static_var"] and det_mean < 80)
+                                  or (det_var < cfg["solid_var"] and det_mean >= effective_thresh))
             else:
                 detected_blank = False
             if mode in ("freeze", "both", "movie") and prev_raw is not None:

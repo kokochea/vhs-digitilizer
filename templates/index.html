@@ -339,6 +339,27 @@
         </div>
 
         <div class="cfg-row">
+          <div class="cfg-label">
+            Dispositivo de audio
+            <button type="button" id="cfg-audio-detect" onclick="detectAudioDevices()"
+                    style="margin-left:8px;padding:2px 10px;font-size:12px;background:#374151;color:#fff;border:none;border-radius:4px;cursor:pointer">
+              ↻ Detectar
+            </button>
+          </div>
+          <div class="cfg-desc">
+            Tarjeta ALSA usada por FFmpeg. Si la grabación no captura sonido, prueba otra opción.
+            Pulsa "Detectar" para listar las disponibles vía <code>arecord -l</code>.
+          </div>
+          <select class="cfg-select" id="cfg-audio-device" onchange="onAudioDeviceChange()">
+            <option value="hw:0,0">hw:0,0 (predeterminado)</option>
+            <option value="__other__">Otro (escribir manualmente)…</option>
+          </select>
+          <input type="text" id="cfg-audio-device-other" placeholder="ej: plughw:1,0 o default"
+                 style="display:none;margin-top:6px;width:100%;padding:6px 8px;background:#1f2937;color:#fff;border:1px solid #374151;border-radius:4px">
+          <div id="cfg-audio-device-status" class="cfg-desc" style="margin-top:6px;color:#9ca3af"></div>
+        </div>
+
+        <div class="cfg-row">
           <div class="cfg-label">Calidad de audio</div>
           <select class="cfg-select" id="cfg-audio-bitrate">
             <option value="96k">96 kbps</option>
@@ -783,12 +804,81 @@ async function loadConfig() {
     document.getElementById("val-audio-rms-db").textContent     = c.audio_rms_db ?? -35;
     document.getElementById("cfg-min-seg-secs").value           = c.min_segment_secs ?? 2;
     document.getElementById("val-min-seg-secs").textContent     = c.min_segment_secs ?? 2;
+    setAudioDeviceValue(c.audio_device ?? "hw:0,0");
     onAutoSegChange();
     onAudioSilenceChange();
+    // Carga inicial de dispositivos detectados (silenciosa si falla)
+    detectAudioDevices(true);
   } catch (e) {}
 }
 
+// Selecciona un valor en el dropdown de audio_device; si no existe como opción
+// fija, lo activa como "Otro…" y lo escribe en el input freeform.
+function setAudioDeviceValue(val) {
+  const sel   = document.getElementById("cfg-audio-device");
+  const other = document.getElementById("cfg-audio-device-other");
+  const opts  = Array.from(sel.options).map(o => o.value);
+  if (opts.includes(val)) {
+    sel.value = val;
+    other.style.display = "none";
+    other.value = "";
+  } else {
+    sel.value = "__other__";
+    other.style.display = "";
+    other.value = val;
+  }
+}
+
+function onAudioDeviceChange() {
+  const sel   = document.getElementById("cfg-audio-device");
+  const other = document.getElementById("cfg-audio-device-other");
+  other.style.display = (sel.value === "__other__") ? "" : "none";
+}
+
+async function detectAudioDevices(silent) {
+  const sel    = document.getElementById("cfg-audio-device");
+  const status = document.getElementById("cfg-audio-device-status");
+  const current = (sel.value === "__other__")
+    ? document.getElementById("cfg-audio-device-other").value
+    : sel.value;
+  try {
+    const r = await fetch("/api/audio-devices");
+    const d = await r.json();
+    // Reconstruir el select: dispositivos detectados + "Otro…"
+    sel.innerHTML = "";
+    (d.devices || []).forEach(dev => {
+      const opt = document.createElement("option");
+      opt.value = dev.device;
+      opt.textContent = `${dev.device} — ${dev.name}` +
+                        (dev.description ? ` (${dev.description})` : "");
+      sel.appendChild(opt);
+    });
+    const otherOpt = document.createElement("option");
+    otherOpt.value = "__other__";
+    otherOpt.textContent = "Otro (escribir manualmente)…";
+    sel.appendChild(otherOpt);
+    // Restaurar selección previa
+    setAudioDeviceValue(current || d.current || "hw:0,0");
+    if (!silent) {
+      const n = (d.devices || []).length;
+      status.textContent = n
+        ? `${n} dispositivo(s) detectados vía ${d.source}.`
+        : `Sin dispositivos detectados (${d.arecord_stderr || "sin info"}).`;
+      status.style.color = n ? "#10b981" : "#f59e0b";
+    }
+  } catch (e) {
+    if (!silent) {
+      status.textContent = "Error al consultar /api/audio-devices: " + e;
+      status.style.color = "#ef4444";
+    }
+  }
+}
+
 async function saveConfig() {
+  const audioSel = document.getElementById("cfg-audio-device").value;
+  const audioDevice = (audioSel === "__other__")
+    ? document.getElementById("cfg-audio-device-other").value.trim()
+    : audioSel;
   const payload = {
     auto_segmentation: document.getElementById("cfg-auto-seg").checked,
     segmentation_mode: document.getElementById("cfg-seg-mode").value,
@@ -806,6 +896,7 @@ async function saveConfig() {
     use_audio:          document.getElementById("cfg-use-audio").checked,
     audio_rms_db:       parseInt(document.getElementById("cfg-audio-rms-db").value),
     min_segment_secs:   parseInt(document.getElementById("cfg-min-seg-secs").value),
+    audio_device:       audioDevice,
   };
   window._lastCfg = payload;
   try {

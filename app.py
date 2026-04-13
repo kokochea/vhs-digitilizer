@@ -1,4 +1,4 @@
-import glob, io, json, os, queue, shutil, subprocess, threading, time, zipfile
+import glob, io, json, os, queue, re, shutil, subprocess, threading, time, zipfile
 import numpy as np
 from datetime import datetime
 from flask import Flask, jsonify, render_template, Response, send_file, request
@@ -7,7 +7,6 @@ app = Flask(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 VIDEO_DEVICE = "/dev/video0"
-AUDIO_DEVICE = "hw:1,0"   # Elgato Cam Link 4K — directo, sin dmix/plugins
 OUTPUT_DIR  = "/mnt/vhs-disk/vhs-captures"
 THUMB_DIR   = "/tmp/vhs_thumbs"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -34,7 +33,12 @@ config = {
     "use_audio":           False,  # True → combina video + audio RMS para decidir corte
     "audio_rms_db":        -35,    # dBFS por encima del cual el audio se considera activo (-60 a 0)
     "min_segment_secs":    2,      # duración mínima de un segmento para guardarlo
+    "audio_device":       "hw:0,0",# dispositivo ALSA — ej: hw:0,0, plughw:1,0, default
 }
+
+# Regex de validación para audio_device (evita typos; no es protección contra
+# inyección porque el valor se pasa como argv a FFmpeg, no a un shell)
+_AUDIO_DEVICE_RE = re.compile(r"^(default|(plug)?hw:\d+(,\d+)?)$")
 
 def _load_config():
     if os.path.exists(CONFIG_FILE):
@@ -269,7 +273,8 @@ def recorder_thread() -> None:
 
     # Snapshot de config al inicio (valores fijos durante la sesión)
     cfg = dict(config)
-    use_audio_rms = cfg["use_audio"] and bool(AUDIO_DEVICE)
+    audio_device  = (cfg.get("audio_device") or "").strip()
+    use_audio_rms = cfg["use_audio"] and bool(audio_device)
 
     # Pipes: preview MJPEG y (opcionalmente) audio crudo para RMS
     prev_r, prev_w = os.pipe()
@@ -285,11 +290,11 @@ def recorder_thread() -> None:
         "-video_size", "1920x1080", "-framerate", "60",
         "-i", VIDEO_DEVICE,
     ]
-    if AUDIO_DEVICE:
+    if audio_device:
         cmd += [
             "-thread_queue_size", "8192",
             "-f", "alsa", "-sample_rate", "48000", "-channels", "2",
-            "-i", AUDIO_DEVICE,
+            "-i", audio_device,
         ]
 
     # filter_complex: video siempre; audio split solo si RMS activo
@@ -304,7 +309,7 @@ def recorder_thread() -> None:
 
     cmd += ["-filter_complex", fc, "-map", "[enc]"]
 
-    if AUDIO_DEVICE:
+    if audio_device:
         if use_audio_rms:
             cmd += ["-map", "[encaudio]", "-c:a", "aac", "-b:a", cfg["audio_bitrate"]]
         else:
@@ -403,6 +408,26 @@ def recorder_thread() -> None:
         state.update(status="idle", message=f"Error FFmpeg: {err[-300:].strip()}")
         running = False
         return
+
+    # FFmpeg sigue vivo, pero puede haber abierto solo el video y fallado el ALSA
+    # silenciosamente. Escanear stderr por errores conocidos de audio y avisarle
+    # al usuario sin matar la grabación de video.
+    if audio_device:
+        stderr_text = b"".join(stderr_lines).decode(errors="replace").lower()
+        alsa_fingerprints = (
+            "cannot open audio device",
+            "device or resource busy",
+            "no such file or directory",
+            "snd_pcm_",
+            "alsa: ",
+            "unknown pcm",
+        )
+        if any(fp in stderr_text for fp in alsa_fingerprints):
+            warn = (f"⚠ Audio: no se pudo abrir '{audio_device}'. "
+                    f"Revisa Configuración → Dispositivo de audio "
+                    f"(usa /api/audio-devices para ver los disponibles).")
+            state["last_error"] = warn
+            state["message"]    = warn
 
     frame_n             = 0
     session_start_wall  = None   # wall-clock del primer frame → t=0 en el session file
@@ -718,8 +743,109 @@ def api_debug():
              "size_mb": round(os.path.getsize(f) / 1_048_576, 1)}
             for f in sorted(files)
         ],
-        "audio_device":  AUDIO_DEVICE,
+        "audio_device":  config.get("audio_device", ""),
         "ffmpeg_stderr": b"".join(ffmpeg_stderr_lines).decode(errors="replace")[-3000:],
+    })
+
+
+# ── Audio device enumeration ───────────────────────────────────────────────────
+def _parse_arecord_l(stdout: str) -> list:
+    """Parsea la salida de `arecord -l` en una lista de dispositivos.
+
+    Cada línea relevante tiene la forma:
+      card 0: Camlink4K [Cam Link 4K], device 0: USB Audio [USB Audio]
+    """
+    devices = []
+    line_re = re.compile(
+        r"^card\s+(\d+):\s+(\S+)\s*\[([^\]]+)\],\s*device\s+(\d+):\s*(.+)$"
+    )
+    for line in stdout.splitlines():
+        m = line_re.match(line.strip())
+        if not m:
+            continue
+        card_n, card_id, card_name, dev_n, dev_desc = m.groups()
+        devices.append({
+            "device":      f"hw:{card_n},{dev_n}",
+            "card_id":     card_id,
+            "name":        card_name,
+            "description": dev_desc.strip(),
+        })
+    return devices
+
+
+def _parse_proc_asound_cards() -> list:
+    """Fallback: lee /proc/asound/cards si arecord no está disponible.
+
+    Solo recupera la información de tarjeta — asume device 0. No requiere
+    libasound, por lo que sobrevive al bug de enumeración mencionado en
+    PROGRESS.md.
+    """
+    devices = []
+    try:
+        with open("/proc/asound/cards") as f:
+            content = f.read()
+    except Exception:
+        return devices
+    # Formato: " 0 [Camlink4K      ]: USB-Audio - Cam Link 4K\n   ..."
+    line_re = re.compile(r"^\s*(\d+)\s+\[(\S+)\s*\]:\s*(.+)$")
+    for line in content.splitlines():
+        m = line_re.match(line)
+        if not m:
+            continue
+        card_n, card_id, desc = m.groups()
+        devices.append({
+            "device":      f"hw:{card_n},0",
+            "card_id":     card_id,
+            "name":        desc.strip(),
+            "description": "(detectado vía /proc/asound/cards — device asumido = 0)",
+        })
+    return devices
+
+
+@app.route("/api/audio-devices")
+def api_audio_devices():
+    arecord_stdout = arecord_stderr = ""
+    arecord_rc = None
+    devices    = []
+    source     = "arecord"
+    try:
+        result = subprocess.run(
+            ["arecord", "-l"],
+            capture_output=True, text=True, timeout=3,
+        )
+        arecord_stdout = result.stdout
+        arecord_stderr = result.stderr
+        arecord_rc     = result.returncode
+        devices        = _parse_arecord_l(result.stdout)
+    except FileNotFoundError:
+        arecord_stderr = "arecord no instalado"
+    except Exception as e:
+        arecord_stderr = f"arecord falló: {e}"
+
+    if not devices:
+        fallback = _parse_proc_asound_cards()
+        if fallback:
+            devices = fallback
+            source  = "/proc/asound/cards"
+
+    # Garantiza que el dispositivo configurado siempre aparezca en la lista,
+    # incluso si arecord no lo detecta — así el UI puede mostrarlo como seleccionado.
+    current = config.get("audio_device", "")
+    if current and not any(d["device"] == current for d in devices):
+        devices.insert(0, {
+            "device":      current,
+            "card_id":     "?",
+            "name":        "(configurado, no detectado)",
+            "description": "Este dispositivo está en config pero ALSA no lo enumera ahora mismo.",
+        })
+
+    return jsonify({
+        "current":        current,
+        "devices":        devices,
+        "source":         source,
+        "arecord_rc":     arecord_rc,
+        "arecord_stdout": arecord_stdout,
+        "arecord_stderr": arecord_stderr,
     })
 
 
@@ -901,6 +1027,7 @@ def set_config():
         "use_audio":           bool,
         "audio_rms_db":        int,
         "min_segment_secs":    int,
+        "audio_device":        str,
     }
     valid_presets  = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium"}
     valid_bitrates = {"96k", "128k", "192k", "320k"}
@@ -942,6 +1069,12 @@ def set_config():
             errors.append("audio_rms_db debe estar entre -60 y 0 dBFS")
         elif key == "min_segment_secs" and not (1 <= val <= 300):
             errors.append("min_segment_secs debe estar entre 1 y 300")
+        elif key == "audio_device":
+            val = val.strip()
+            if val and not _AUDIO_DEVICE_RE.match(val):
+                errors.append("audio_device inválido: usa hw:N,M, plughw:N,M o default")
+            else:
+                config[key] = val
         else:
             config[key] = val
     if errors:

@@ -1219,6 +1219,26 @@ def drive_folders():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+@app.route("/api/drive/create-folder", methods=["POST"])
+def drive_create_folder():
+    data      = request.get_json(silent=True) or {}
+    name      = data.get("name", "").strip()
+    parent_id = data.get("parent_id", "root")
+    if not name:
+        return jsonify({"ok": False, "msg": "El nombre es obligatorio"}), 400
+    svc = _drive_svc()
+    if svc is None:
+        return jsonify({"ok": False, "msg": "No autenticado con Google Drive"}), 401
+    try:
+        folder = svc.files().create(
+            body={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]},
+            fields="id,name",
+        ).execute()
+        return jsonify({"ok": True, "folder": folder})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
 @app.route("/api/drive/upload", methods=["POST"])
 def drive_upload():
     data      = request.get_json(silent=True) or {}

@@ -156,10 +156,15 @@
     .folder-breadcrumb { font-size: 12px; color: #6b7280; margin-bottom: 12px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
     .folder-breadcrumb .bc-item { cursor: pointer; color: #3b82f6; }
     .folder-breadcrumb .bc-item.current { color: #eee; cursor: default; }
-    .folder-list { max-height: 280px; overflow-y: auto; border: 1px solid #2a2a2a; border-radius: 8px; }
+    .folder-search-row { display: flex; gap: 8px; margin-bottom: 10px; }
+    .folder-search { flex: 1; background: #111; color: #eee; border: 1px solid #333; border-radius: 6px; padding: 7px 10px; font-size: 13px; outline: none; }
+    .folder-search:focus { border-color: #3b82f6; }
+    .folder-list { max-height: 260px; overflow-y: auto; border: 1px solid #2a2a2a; border-radius: 8px; }
     .folder-item { padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px; border-bottom: 1px solid #1f1f1f; }
     .folder-item:last-child { border-bottom: none; }
     .folder-item:hover { background: #222; }
+    .folder-item.new-folder-row { color: #3b82f6; font-style: italic; }
+    .folder-item.new-folder-row:hover { background: #1e2d3d; }
     .folder-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   </style>
 </head>
@@ -456,6 +461,11 @@
     <button class="modal-close" onclick="closeFolderModal()" style="float:right">✕</button>
     <h3>Seleccionar carpeta de destino</h3>
     <div class="folder-breadcrumb" id="folder-breadcrumb"></div>
+    <div class="folder-search-row">
+      <input type="text" class="folder-search" id="folder-search"
+             placeholder="Buscar carpeta…" oninput="filterFolders(this.value)">
+      <button class="btn-drive" onclick="promptNewFolder()" style="white-space:nowrap">+ Nueva carpeta</button>
+    </div>
     <div class="folder-list" id="folder-list">
       <div class="empty" style="padding:20px">Cargando…</div>
     </div>
@@ -1028,9 +1038,45 @@ async function driveDisconnect() {
 }
 
 // ── Selector de carpetas ───────────────────────────────────────────────────────
+let _currentFolderList = [];   // caché de carpetas del directorio actual
+
+function _renderFolderList(folders) {
+  const list = document.getElementById("folder-list");
+  if (!folders.length) {
+    list.innerHTML = '<div class="empty" style="padding:16px;font-size:13px">Sin subcarpetas</div>';
+    return;
+  }
+  list.innerHTML = folders.map(f =>
+    `<div class="folder-item" onclick="_navigateDrive('${f.id}','${f.name.replace(/'/g, "\\'")}')">📁 ${f.name}</div>`
+  ).join("");
+}
+
+function filterFolders(query) {
+  const q = query.trim().toLowerCase();
+  _renderFolderList(q
+    ? _currentFolderList.filter(f => f.name.toLowerCase().includes(q))
+    : _currentFolderList
+  );
+}
+
+async function promptNewFolder() {
+  const name = prompt("Nombre de la nueva carpeta:");
+  if (!name || !name.trim()) return;
+  const r = await fetch("/api/drive/create-folder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name.trim(), parent_id: _driveCurrentFolder.id }),
+  });
+  const d = await r.json();
+  if (!d.ok) { alert("Error: " + d.msg); return; }
+  // Recargar carpetas y navegar a la nueva
+  await _navigateDrive(_driveCurrentFolder.id, _driveCurrentFolder.name);
+}
+
 async function _navigateDrive(folderId, folderName) {
   const list = document.getElementById("folder-list");
   list.innerHTML = '<div class="empty" style="padding:20px">Cargando…</div>';
+  document.getElementById("folder-search").value = "";
   // Actualizar breadcrumb
   const existIdx = _driveBreadcrumb.findIndex(b => b.id === folderId);
   if (existIdx >= 0) {
@@ -1044,28 +1090,25 @@ async function _navigateDrive(folderId, folderName) {
     const isCurrent = i === _driveBreadcrumb.length - 1;
     return isCurrent
       ? `<span class="bc-item current">${b.name}</span>`
-      : `<span class="bc-item" onclick="_navigateDrive('${b.id}','${b.name.replace(/'/g,"\\'")}'')">${b.name}</span> /`;
+      : `<span class="bc-item" onclick="_navigateDrive('${b.id}','${b.name.replace(/'/g, "\\'")}')"> ${b.name}</span> /`;
   }).join(" ");
   try {
     const r = await fetch(`/api/drive/folders?parent_id=${folderId}`);
     const d = await r.json();
     if (!d.ok) { list.innerHTML = `<div class="empty">${d.msg}</div>`; return; }
-    if (!d.folders.length) {
-      list.innerHTML = '<div class="empty" style="padding:16px;font-size:13px">Sin subcarpetas</div>';
-      return;
-    }
-    list.innerHTML = d.folders.map(f =>
-      `<div class="folder-item" onclick="_navigateDrive('${f.id}','${f.name.replace(/'/g,"\\'")}')">📁 ${f.name}</div>`
-    ).join("");
+    _currentFolderList = d.folders;
+    _renderFolderList(_currentFolderList);
   } catch (e) {
     list.innerHTML = '<div class="empty">Error al cargar carpetas</div>';
   }
 }
 
 function openFolderModal(queue) {
-  _driveUploadQueue   = queue;
-  _driveBreadcrumb    = [{ id: "root", name: "Mi unidad" }];
-  _driveCurrentFolder = { id: "root", name: "Mi unidad" };
+  _driveUploadQueue    = queue;
+  _driveBreadcrumb     = [{ id: "root", name: "Mi unidad" }];
+  _driveCurrentFolder  = { id: "root", name: "Mi unidad" };
+  _currentFolderList   = [];
+  document.getElementById("folder-search").value = "";
   document.getElementById("folder-modal").classList.add("open");
   _navigateDrive("root");
 }

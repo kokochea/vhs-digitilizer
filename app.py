@@ -1108,22 +1108,27 @@ def drive_auth_start():
     if not client_id or not client_secret:
         return jsonify({"ok": False, "msg": "client_id y client_secret son obligatorios"}), 400
     try:
-        import pickle
+        redirect_uri  = request.host_url.rstrip("/") + "/api/drive/callback"
         client_config = {"web": {
             "client_id":     client_id,
             "client_secret": client_secret,
             "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
             "token_uri":     "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost:5000/api/drive/callback"],
+            "redirect_uris": [redirect_uri],
         }}
         flow = _GFlow.from_client_config(
-            client_config, scopes=DRIVE_SCOPES,
-            redirect_uri="http://localhost:5000/api/drive/callback",
+            client_config, scopes=DRIVE_SCOPES, redirect_uri=redirect_uri,
         )
-        auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent")
-        flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.pkl")
-        with open(flow_file, "wb") as f:
-            pickle.dump({"flow": flow, "client_id": client_id, "client_secret": client_secret}, f)
+        auth_url, state = flow.authorization_url(access_type="offline", prompt="consent")
+        # Guardar solo los datos serializables (sin el objeto Flow)
+        flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.json")
+        with open(flow_file, "w") as f:
+            json.dump({
+                "client_id":     client_id,
+                "client_secret": client_secret,
+                "redirect_uri":  redirect_uri,
+                "state":         state,
+            }, f)
         return jsonify({"ok": True, "auth_url": auth_url})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
@@ -1135,13 +1140,22 @@ def drive_callback():
     if not code:
         return "Error: no authorization code received", 400
     try:
-        import pickle
-        flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.pkl")
-        with open(flow_file, "rb") as f:
-            data = pickle.load(f)
-        flow          = data["flow"]
+        flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.json")
+        with open(flow_file) as f:
+            data = json.load(f)
         client_id     = data["client_id"]
         client_secret = data["client_secret"]
+        redirect_uri  = data["redirect_uri"]
+        client_config = {"web": {
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
+            "token_uri":     "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri],
+        }}
+        flow = _GFlow.from_client_config(
+            client_config, scopes=DRIVE_SCOPES, redirect_uri=redirect_uri,
+        )
         flow.fetch_token(code=code)
         creds = flow.credentials
         _drive_save_creds(creds, client_id, client_secret)

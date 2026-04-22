@@ -2,5 +2,5 @@ __pycache__/
 *.pyc
 *.pyo
 drive_creds.json
-_drive_flow.pkl
+_drive_flow.json
 config.json

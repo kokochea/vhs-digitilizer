@@ -1113,20 +1113,21 @@ def drive_auth_start():
     if not client_id or not client_secret:
         return jsonify({"ok": False, "msg": "client_id y client_secret son obligatorios"}), 400
     try:
-        redirect_uri  = request.host_url.rstrip("/") + "/api/drive/callback"
-        client_config = {"web": {
+        import urllib.parse, secrets
+        redirect_uri = request.host_url.rstrip("/") + "/api/drive/callback"
+        state        = secrets.token_hex(16)
+        # Construir URL manualmente — sin PKCE — para evitar el problema de code_verifier
+        # al reconstruir el Flow en el callback
+        params = {
             "client_id":     client_id,
-            "client_secret": client_secret,
-            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-            "token_uri":     "https://oauth2.googleapis.com/token",
-            "redirect_uris": [redirect_uri],
-        }}
-        flow = _GFlow.from_client_config(
-            client_config, scopes=DRIVE_SCOPES, redirect_uri=redirect_uri,
-        )
-        auth_url, state = flow.authorization_url(access_type="offline", prompt="consent")
-        # PKCE: guardar code_verifier generado por la librería para usarlo en el callback
-        code_verifier = getattr(flow.oauth2session, "_code_verifier", None)
+            "redirect_uri":  redirect_uri,
+            "response_type": "code",
+            "scope":         " ".join(DRIVE_SCOPES),
+            "access_type":   "offline",
+            "prompt":        "consent",
+            "state":         state,
+        }
+        auth_url  = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
         flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.json")
         with open(flow_file, "w") as f:
             json.dump({
@@ -1134,7 +1135,6 @@ def drive_auth_start():
                 "client_secret": client_secret,
                 "redirect_uri":  redirect_uri,
                 "state":         state,
-                "code_verifier": code_verifier,
             }, f)
         return jsonify({"ok": True, "auth_url": auth_url})
     except Exception as e:
@@ -1147,27 +1147,36 @@ def drive_callback():
     if not code:
         return "Error: no authorization code received", 400
     try:
+        import urllib.request, urllib.parse
         flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.json")
         with open(flow_file) as f:
             data = json.load(f)
         client_id     = data["client_id"]
         client_secret = data["client_secret"]
         redirect_uri  = data["redirect_uri"]
-        client_config = {"web": {
-            "client_id":     client_id,
-            "client_secret": client_secret,
-            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
-            "token_uri":     "https://oauth2.googleapis.com/token",
-            "redirect_uris": [redirect_uri],
-        }}
-        flow = _GFlow.from_client_config(
-            client_config, scopes=DRIVE_SCOPES, redirect_uri=redirect_uri,
+        # Intercambiar code por tokens directamente con la API de Google (sin PKCE)
+        token_req = urllib.request.Request(
+            "https://oauth2.googleapis.com/token",
+            data=urllib.parse.urlencode({
+                "code":          code,
+                "client_id":     client_id,
+                "client_secret": client_secret,
+                "redirect_uri":  redirect_uri,
+                "grant_type":    "authorization_code",
+            }).encode(),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
         )
-        code_verifier = data.get("code_verifier")
-        if code_verifier:
-            flow.oauth2session._code_verifier = code_verifier
-        flow.fetch_token(code=code, code_verifier=code_verifier)
-        creds = flow.credentials
+        with urllib.request.urlopen(token_req) as resp:
+            token_info = json.loads(resp.read())
+        creds = _GCredentials(
+            token=token_info["access_token"],
+            refresh_token=token_info.get("refresh_token"),
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=DRIVE_SCOPES,
+        )
         _drive_save_creds(creds, client_id, client_secret)
         os.remove(flow_file)
         _drive_load_creds()

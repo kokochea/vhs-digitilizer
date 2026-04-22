@@ -10,6 +10,9 @@ try:
     from googleapiclient.discovery import build as _gbuild
     from googleapiclient.http import MediaFileUpload as _GMediaUpload
     import google.auth.transport.requests as _greq
+    import httplib2, certifi
+    # Forzar httplib2 a usar el bundle de certifi (evita [SSL] record layer failure en Docker)
+    httplib2.CA_CERTS = certifi.where()
     DRIVE_AVAILABLE = True
 except ImportError:
     DRIVE_AVAILABLE = False

@@ -1242,6 +1242,121 @@ def drive_create_folder():
         return jsonify({"ok": False, "msg": str(e)}), 500
 
 
+def _drive_upload_resumable(filepath: str, filename: str, folder_id: str) -> dict:
+    """Sube un archivo a Drive usando resumable upload manual con `requests`.
+
+    Evita httplib2 (que tira [SSL] record layer failure en Docker+Proxmox) y
+    añade retry con backoff exponencial sobre errores SSL/red. Usa chunks de
+    1 MB (menos probabilidad de timeout TLS durante la transferencia).
+    """
+    import requests
+    global _drive_credentials
+    if _drive_credentials is None:
+        raise RuntimeError("No autenticado con Google Drive")
+    # Refrescar token si está expirado
+    if _drive_credentials.expired and _drive_credentials.refresh_token:
+        _drive_credentials.refresh(_greq.Request())
+
+    file_size = os.path.getsize(filepath)
+    CHUNK     = 1 * 1024 * 1024   # 1 MB — más pequeño = menos fallos TLS
+    MAX_RETRY = 6
+
+    def _auth_header():
+        return {"Authorization": f"Bearer {_drive_credentials.token}"}
+
+    # 1) Iniciar sesión resumable → obtener upload URL
+    init_r = requests.post(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+        headers={
+            **_auth_header(),
+            "Content-Type":            "application/json; charset=UTF-8",
+            "X-Upload-Content-Type":   "video/mp4",
+            "X-Upload-Content-Length": str(file_size),
+        },
+        json={"name": filename, "parents": [folder_id]},
+        timeout=30,
+    )
+    init_r.raise_for_status()
+    upload_url = init_r.headers["Location"]
+
+    # 2) Subir en chunks con retry
+    offset = 0
+    with open(filepath, "rb") as f:
+        while offset < file_size:
+            chunk = f.read(CHUNK)
+            end   = offset + len(chunk) - 1
+
+            last_exc = None
+            for attempt in range(MAX_RETRY):
+                try:
+                    r = requests.put(
+                        upload_url,
+                        headers={
+                            "Content-Length": str(len(chunk)),
+                            "Content-Range":  f"bytes {offset}-{end}/{file_size}",
+                        },
+                        data=chunk,
+                        timeout=(30, 300),   # (connect, read) — reads lentos OK
+                    )
+                    if r.status_code in (200, 201):
+                        _drive_upload_prog[filename] = 100
+                        return r.json()
+                    if r.status_code == 308:
+                        # Chunk aceptado; verificar Range header por si el servidor
+                        # recibió menos bytes de los enviados (raro, pero posible)
+                        rng = r.headers.get("Range")
+                        if rng and rng.startswith("bytes="):
+                            try:
+                                server_end = int(rng.split("-")[1])
+                                offset = server_end + 1
+                            except Exception:
+                                offset += len(chunk)
+                        else:
+                            offset += len(chunk)
+                        _drive_upload_prog[filename] = int(offset * 100 / file_size)
+                        break
+                    if r.status_code == 401:
+                        # Token expiró mid-upload → refrescar y reintentar
+                        _drive_credentials.refresh(_greq.Request())
+                        continue
+                    if r.status_code >= 500 and attempt < MAX_RETRY - 1:
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+                except (requests.ConnectionError, requests.Timeout, OSError) as e:
+                    last_exc = e
+                    if attempt < MAX_RETRY - 1:
+                        time.sleep(2 ** attempt)
+                        # Preguntar al servidor cuántos bytes recibió para resumir
+                        try:
+                            q = requests.put(
+                                upload_url,
+                                headers={
+                                    "Content-Length": "0",
+                                    "Content-Range":  f"bytes */{file_size}",
+                                },
+                                timeout=30,
+                            )
+                            if q.status_code == 308:
+                                rng = q.headers.get("Range")
+                                if rng and rng.startswith("bytes="):
+                                    server_end = int(rng.split("-")[1])
+                                    offset = server_end + 1
+                                    f.seek(offset)
+                                # Si no hay Range header, el servidor no recibió nada
+                            elif q.status_code in (200, 201):
+                                _drive_upload_prog[filename] = 100
+                                return q.json()
+                        except Exception:
+                            pass
+                        continue
+                    raise RuntimeError(f"SSL/red tras {MAX_RETRY} intentos: {e}")
+            else:
+                raise RuntimeError(f"Falló chunk tras {MAX_RETRY} intentos: {last_exc}")
+
+    return {"name": filename}
+
+
 @app.route("/api/drive/upload", methods=["POST"])
 def drive_upload():
     data      = request.get_json(silent=True) or {}
@@ -1249,19 +1364,12 @@ def drive_upload():
     folder_id = data.get("folder_id", "root")
     if not _is_valid_library_file(filename):
         return jsonify({"ok": False, "msg": "Archivo no válido"}), 400
-    svc = _drive_svc()
-    if svc is None:
+    if _drive_svc() is None:
         return jsonify({"ok": False, "msg": "No autenticado con Google Drive"}), 401
     path = os.path.join(OUTPUT_DIR, filename)
     try:
-        media     = _GMediaUpload(path, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024)
-        file_meta = {"name": filename, "parents": [folder_id]}
-        req       = svc.files().create(body=file_meta, media_body=media, fields="id,name,webViewLink")
-        resp      = None
-        while resp is None:
-            status, resp = req.next_chunk()
-            if status:
-                _drive_upload_prog[filename] = int(status.progress() * 100)
+        _drive_upload_prog[filename] = 0
+        resp = _drive_upload_resumable(path, filename, folder_id)
         _drive_upload_prog.pop(filename, None)
         return jsonify({"ok": True, "file": resp})
     except Exception as e:
@@ -1274,8 +1382,7 @@ def drive_upload_bulk():
     data      = request.get_json(silent=True) or {}
     files     = data.get("files", [])
     folder_id = data.get("folder_id", "root")
-    svc = _drive_svc()
-    if svc is None:
+    if _drive_svc() is None:
         return jsonify({"ok": False, "msg": "No autenticado con Google Drive"}), 401
     results = []
     for filename in files:
@@ -1284,14 +1391,8 @@ def drive_upload_bulk():
             continue
         path = os.path.join(OUTPUT_DIR, filename)
         try:
-            media     = _GMediaUpload(path, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024)
-            file_meta = {"name": filename, "parents": [folder_id]}
-            req       = svc.files().create(body=file_meta, media_body=media, fields="id,name")
-            resp      = None
-            while resp is None:
-                status, resp = req.next_chunk()
-                if status:
-                    _drive_upload_prog[filename] = int(status.progress() * 100)
+            _drive_upload_prog[filename] = 0
+            resp = _drive_upload_resumable(path, filename, folder_id)
             _drive_upload_prog.pop(filename, None)
             results.append({"filename": filename, "ok": True, "file": resp})
         except Exception as e:

@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir flask numpy google-api-python-client google-auth-oauthlib certifi
+RUN pip install --no-cache-dir flask numpy google-api-python-client google-auth-oauthlib certifi requests
 
 WORKDIR /app
 COPY app.py .

@@ -426,7 +426,14 @@
       <div class="drive-creds" id="drive-creds-form">
         <input type="text"     id="drive-client-id"     placeholder="client_id de Google Cloud Console" autocomplete="off">
         <input type="password" id="drive-client-secret" placeholder="client_secret" autocomplete="off">
-        <div style="font-size:11px;color:#555">Crea credenciales OAuth2 en <em>console.cloud.google.com</em> → APIs → Credenciales → Aplicación web, y agrega <code>http://localhost:5000/api/drive/callback</code> como URI de redirección.</div>
+        <div style="font-size:11px;color:#555;line-height:1.5">
+          Crea credenciales OAuth2 en <em>console.cloud.google.com</em> → APIs &amp; Services → Credentials → OAuth 2.0 Client ID → Web application.<br>
+          Agrega exactamente este URI en <strong style="color:#ccc">Authorized redirect URIs</strong>:
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+          <code id="drive-redirect-uri" style="font-size:11px;color:#a78bfa;background:#111;padding:5px 8px;border-radius:5px;flex:1;word-break:break-all">cargando…</code>
+          <button class="btn-drive" onclick="copyRedirectUri()" style="flex-shrink:0">Copiar</button>
+        </div>
       </div>
       <div id="drive-unavailable" style="display:none;font-size:12px;color:#ef4444;margin-top:8px">
         Instala <code>google-api-python-client google-auth-oauthlib</code> para habilitar esta función.
@@ -949,6 +956,18 @@ let _driveBreadcrumb   = [{ id: "root", name: "Mi unidad" }];
 let _driveCurrentFolder = { id: "root", name: "Mi unidad" };
 let _driveUploadQueue  = null;   // { file: "..." } | { files: [...] }
 
+async function loadDriveRedirectUri() {
+  try {
+    const d = await (await fetch("/api/drive/redirect-uri")).json();
+    document.getElementById("drive-redirect-uri").textContent = d.uri;
+  } catch (e) {}
+}
+
+function copyRedirectUri() {
+  const uri = document.getElementById("drive-redirect-uri").textContent;
+  navigator.clipboard.writeText(uri).then(() => alert("URI copiado al portapapeles")).catch(() => {});
+}
+
 async function fetchDriveStatus() {
   try {
     const d = await (await fetch("/api/drive/status")).json();
@@ -1128,6 +1147,7 @@ async function _uploadBulkFiles(files, folderId) {
 }
 
 fetchDriveStatus();
+loadDriveRedirectUri();
 setInterval(fetchDriveStatus, 30000);
 </script>
 </body>

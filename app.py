@@ -1098,6 +1098,11 @@ def drive_status():
         return jsonify({"connected": False, "email": None, "available": True})
 
 
+@app.route("/api/drive/redirect-uri")
+def drive_redirect_uri():
+    return jsonify({"uri": request.host_url.rstrip("/") + "/api/drive/callback"})
+
+
 @app.route("/api/drive/auth/start", methods=["POST"])
 def drive_auth_start():
     if not DRIVE_AVAILABLE:

@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir flask numpy
+RUN pip install --no-cache-dir flask numpy google-api-python-client google-auth-oauthlib
 
 WORKDIR /app
 COPY app.py .

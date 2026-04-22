@@ -91,7 +91,16 @@
     .bulk-zip:hover { background: #1d4ed8; }
     .bulk-clear { padding: 7px 12px; background: none; color: #6b7280; border: none; cursor: pointer; font-size: 13px; }
     .cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    @media (max-width: 600px) { .cfg-grid { grid-template-columns: 1fr; } }
+    .rec-name-wrap { margin-top: 14px; }
+    .rec-name-wrap label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; }
+    #rec-name { width: 100%; padding: 9px 12px; background: #111; color: #eee; border: 1px solid #333; border-radius: 6px; font-size: 14px; font-family: inherit; }
+    #rec-name:focus { outline: none; border-color: #3b82f6; }
+    #rec-name:disabled { opacity: .6; cursor: not-allowed; }
+    .rec-name-hint { font-size: 11px; color: #555; margin-top: 4px; }
+    #rec-current { font-size: 13px; color: #9ca3af; margin-top: 6px; }
+    #rec-current strong { color: #e5e7eb; }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .table-scroll table { min-width: 560px; }
     .cfg-group { background: #111; border-radius: 8px; padding: 16px; }
     .cfg-group h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #666; margin-bottom: 14px; }
     .cfg-row { margin-bottom: 14px; }
@@ -125,6 +134,48 @@
     #disk-info { font-size: 12px; color: #555; margin-left: auto; }
     .btn-cut { background: #92400e; color: #fcd34d; }
     .btn-cut:hover { background: #b45309; }
+
+    @media (max-width: 768px) {
+      .container         { padding: 12px; }
+      .card              { padding: 14px; margin-bottom: 14px; }
+      .cfg-grid          { grid-template-columns: 1fr; gap: 14px; }
+      .stats             { grid-template-columns: 1fr 1fr; }
+      header             { padding: 12px 14px; }
+      header h1          { font-size: 17px; }
+      .gallery           { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+      .preview-wrap img  { max-width: 100%; }
+      .btn-row           { gap: 8px; }
+      .btn               { padding: 9px 16px; font-size: 13px; }
+      th, td             { padding: 8px 10px; }
+      table              { font-size: 13px; }
+    }
+
+    @media (max-width: 480px) {
+      .container         { padding: 8px; }
+      .card              { padding: 12px; border-radius: 8px; }
+      .stats             { grid-template-columns: 1fr; }
+      .stat              { padding: 10px; }
+      .stat-value        { font-size: 22px; }
+      .gallery           { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+      .gallery-info      { padding: 8px 10px; }
+      .gallery-actions   { gap: 4px; }
+      .gallery-actions .play-btn,
+      .gallery-actions .dl-btn,
+      .gallery-actions .del-btn { padding: 6px 8px; font-size: 11px; }
+      .gallery-actions .play-btn { font-size: 0; }
+      .gallery-actions .play-btn::before { content: "▶"; font-size: 13px; }
+      .gallery-actions .dl-btn { font-size: 0; }
+      .gallery-actions .dl-btn::before { content: "↓"; font-size: 13px; }
+      .bulk-bar {
+        left: 0; right: 0; bottom: 0; transform: none;
+        border-radius: 0; border-left: none; border-right: none; border-bottom: none;
+        padding: 10px 12px; justify-content: space-between;
+        box-shadow: 0 -4px 12px rgba(0,0,0,.6);
+      }
+      .bulk-zip, .bulk-del { padding: 8px 10px; font-size: 12px; flex: 0 1 auto; }
+      .bulk-count          { font-size: 12px; }
+      .bulk-clear          { padding: 6px 8px; font-size: 12px; }
+    }
   </style>
 </head>
 <body>
@@ -141,6 +192,7 @@
       <span class="badge idle" id="badge">Idle</span>
       <span class="message" id="message">Cargando...</span>
     </div>
+    <div id="rec-current" style="display:none">Grabando: <strong id="rec-current-name"></strong></div>
     <div class="stats">
       <div class="stat">
         <div class="stat-value" id="seg-found">0</div>
@@ -174,8 +226,14 @@
         <progress class="cut-bar" id="cut-bar" max="100" value="0"></progress>
       </div>
     </div>
+    <div class="rec-name-wrap">
+      <label for="rec-name">Nombre de la grabación</label>
+      <input type="text" id="rec-name" maxlength="120" placeholder="ej: Cumpleaños 1995"
+             oninput="onRecNameInput()" autocomplete="off">
+      <div class="rec-name-hint">Requerido para iniciar. Caracteres / \ : ? * &lt; &gt; | &quot; serán reemplazados por espacios.</div>
+    </div>
     <div class="btn-row">
-      <button class="btn btn-start"   id="btn-start"   onclick="startRecording()">▶ Iniciar</button>
+      <button class="btn btn-start"   id="btn-start"   onclick="startRecording()" disabled>▶ Iniciar</button>
       <button class="btn btn-stop"    id="btn-stop"    onclick="stopRecording()" disabled>⏹ Detener</button>
       <button class="btn btn-cut"     id="btn-cut"     onclick="forceCut()" style="display:none">✂ Cortar</button>
       <button class="btn btn-preview" id="btn-preview" onclick="togglePreview()">👁 Preview</button>
@@ -499,11 +557,35 @@ async function fetchStatus() {
     }
 
     const busy = d.status !== "idle";
-    document.getElementById("btn-start").disabled = busy;
+    _recording = busy;
+    updateStartButtonEnabled();
     document.getElementById("btn-stop").disabled  =
       d.status === "idle" || d.status === "processing";
     document.getElementById("btn-cut").style.display =
       d.status === "recording" ? "" : "none";
+
+    // Nombre de grabación: mostrar / ocultar, y gobernar el input
+    const inp = document.getElementById("rec-name");
+    const curBox  = document.getElementById("rec-current");
+    const curName = document.getElementById("rec-current-name");
+    if (busy) {
+      if (d.recording_name) {
+        inp.value = d.recording_name;
+        _recNameClean = d.recording_name;
+        curName.textContent = d.recording_name;
+        curBox.style.display = "";
+      }
+      inp.disabled = true;
+    } else {
+      // al volver a idle, limpiar el nombre para la próxima cinta
+      if (inp.disabled) {
+        inp.disabled = false;
+        inp.value = "";
+        _recNameClean = "";
+      }
+      curBox.style.display = "none";
+      updateStartButtonEnabled();
+    }
   } catch (e) {}
 }
 
@@ -558,6 +640,11 @@ function updateSelectionUI() {
   });
 }
 
+function htmlEscape(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function renderLibrary() {
   const el = document.getElementById("library-content");
   if (!libraryFiles.length) {
@@ -565,36 +652,43 @@ function renderLibrary() {
     return;
   }
   if (currentView === "table") {
-    el.innerHTML = `<table>
+    el.innerHTML = `<div class="table-scroll"><table>
       <thead><tr>
         <th><input type="checkbox" id="chk-all" onchange="toggleAll(this.checked)" title="Seleccionar todo"></th>
         <th>Archivo</th><th>Duración</th><th>Tamaño</th><th>Fecha</th><th></th>
       </tr></thead>
-      <tbody>${libraryFiles.map(f => `
-        <tr data-name="${f.name}">
-          <td><input type="checkbox" onchange="toggleSelect('${f.name}')" ${selected.has(f.name) ? "checked" : ""}></td>
-          <td>${f.name}</td>
+      <tbody>${libraryFiles.map(f => {
+        const nameEsc = htmlEscape(f.name);
+        const nameUrl = encodeURIComponent(f.name);
+        return `
+        <tr data-name="${nameEsc}">
+          <td><input type="checkbox" onchange="toggleSelect(this.closest('tr').dataset.name)" ${selected.has(f.name) ? "checked" : ""}></td>
+          <td>${nameEsc}</td>
           <td>${fmtDuration(f.duration)}</td>
           <td>${f.size_mb} MB</td>
           <td>${f.date}</td>
           <td style="display:flex;gap:6px;align-items:center;">
-            <button class="play-btn" onclick="playVideo('${f.name}')">▶ Ver</button>
-            <a class="dl-btn" href="/download/${f.name}">↓ Descargar</a>
-            <button class="del-btn" onclick="deleteFile('${f.name}')">🗑</button>
+            <button class="play-btn" onclick="playVideo(this.closest('tr').dataset.name)">▶ Ver</button>
+            <a class="dl-btn" href="/download/${nameUrl}">↓ Descargar</a>
+            <button class="del-btn" onclick="deleteFile(this.closest('tr').dataset.name)">🗑</button>
           </td>
-        </tr>`).join("")}
-      </tbody></table>`;
+        </tr>`;
+      }).join("")}
+      </tbody></table></div>`;
   } else {
-    el.innerHTML = `<div class="gallery">${libraryFiles.map(f => `
-      <div class="gallery-card${selected.has(f.name) ? " selected" : ""}" data-name="${f.name}">
-        <div class="gallery-thumb" onclick="handleThumbClick('${f.name}')">
-          <img src="/thumbnail/${f.name}" loading="lazy" onerror="this.style.display='none'">
+    el.innerHTML = `<div class="gallery">${libraryFiles.map(f => {
+      const nameEsc = htmlEscape(f.name);
+      const nameUrl = encodeURIComponent(f.name);
+      return `
+      <div class="gallery-card${selected.has(f.name) ? " selected" : ""}" data-name="${nameEsc}">
+        <div class="gallery-thumb" onclick="handleThumbClick(this.closest('.gallery-card').dataset.name)">
+          <img src="/thumbnail/${nameUrl}" loading="lazy" onerror="this.style.display='none'">
           <div class="thumb-play">${selected.has(f.name) ? "✓" : "▶"}</div>
         </div>
         <div class="gallery-info">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-            <input type="checkbox" onchange="toggleSelect('${f.name}')" ${selected.has(f.name) ? "checked" : ""}>
-            <div class="gallery-name" title="${f.name}" style="margin-bottom:0">${f.name}</div>
+            <input type="checkbox" onchange="toggleSelect(this.closest('.gallery-card').dataset.name)" ${selected.has(f.name) ? "checked" : ""}>
+            <div class="gallery-name" title="${nameEsc}" style="margin-bottom:0">${nameEsc}</div>
           </div>
           <div class="gallery-meta">
             <span class="gallery-duration">${fmtDuration(f.duration)}</span>
@@ -602,12 +696,13 @@ function renderLibrary() {
           </div>
           <div class="gallery-meta" style="margin-top:2px">${f.date}</div>
           <div class="gallery-actions">
-            <button class="play-btn" onclick="playVideo('${f.name}')">▶ Ver</button>
-            <a class="dl-btn" href="/download/${f.name}">↓ Descargar</a>
-            <button class="del-btn" onclick="deleteFile('${f.name}')">🗑</button>
+            <button class="play-btn" onclick="playVideo(this.closest('.gallery-card').dataset.name)">▶ Ver</button>
+            <a class="dl-btn" href="/download/${nameUrl}">↓ Descargar</a>
+            <button class="del-btn" onclick="deleteFile(this.closest('.gallery-card').dataset.name)">🗑</button>
           </div>
         </div>
-      </div>`).join("")}
+      </div>`;
+    }).join("")}
     </div>`;
   }
   // sync "select all" checkbox
@@ -628,7 +723,7 @@ function handleThumbClick(name) {
 
 async function deleteFile(name) {
   if (!confirm(`¿Eliminar "${name}"?`)) return;
-  const r = await fetch(`/api/delete/${name}`, { method: "DELETE" });
+  const r = await fetch(`/api/delete/${encodeURIComponent(name)}`, { method: "DELETE" });
   if ((await r.json()).ok) {
     selected.delete(name);
     updateBulkBar();
@@ -673,7 +768,7 @@ async function fetchLibrary() {
 }
 
 function playVideo(name) {
-  document.getElementById("modal-video").src = "/video/" + name;
+  document.getElementById("modal-video").src = "/video/" + encodeURIComponent(name);
   document.getElementById("modal").classList.add("open");
 }
 function closeModal() {
@@ -681,8 +776,53 @@ function closeModal() {
   document.getElementById("modal-video").src = "";
 }
 
+let _recNameClean = "";
+let _recording = false;
+
+function _sanitizeNameClient(raw) {
+  return String(raw || "")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s.]+|[\s.]+$/g, "");
+}
+
+function onRecNameInput() {
+  _recNameClean = _sanitizeNameClient(document.getElementById("rec-name").value);
+  updateStartButtonEnabled();
+}
+
+function updateStartButtonEnabled() {
+  document.getElementById("btn-start").disabled = _recording || !_recNameClean;
+}
+
 async function startRecording() {
-  await fetch("/api/start", { method: "POST" });
+  if (!_recNameClean) return;
+  document.getElementById("btn-start").disabled = true;
+  let j;
+  try {
+    const r = await fetch("/api/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: _recNameClean }),
+    });
+    j = await r.json();
+  } catch (e) {
+    alert("Error de red iniciando la grabación");
+    updateStartButtonEnabled();
+    return;
+  }
+  if (!j.ok) {
+    alert(j.msg || "Error iniciando la grabación");
+    updateStartButtonEnabled();
+    return;
+  }
+  if (j.resolved_name) {
+    const inp = document.getElementById("rec-name");
+    inp.value = j.resolved_name;
+    _recNameClean = j.resolved_name;
+    inp.disabled = true;
+  }
 }
 async function stopRecording() {
   await fetch("/api/stop", { method: "POST" });

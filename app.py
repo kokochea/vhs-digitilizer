@@ -66,21 +66,24 @@ state = {
     "message":          "Esperando inicio...",
     "last_error":       "",       # último error de FFmpeg
     "last_cut_reason":  "",       # qué disparó el último corte
+    "recording_name":   "",       # nombre base elegido por el usuario para la sesión actual
     "detect":           {"mean": 0.0, "var": 0.0, "diff": 0.0},  # métricas en tiempo real
 }
-running               = False
-_force_cut            = False
-ffmpeg_proc           = None
-ffmpeg_stderr_lines   = []          # stderr completo de la última sesión FFmpeg
-_audio_rms            = 0.0         # RMS normalizado 0.0–1.0, actualizado por el hilo de audio
-_audio_lock           = threading.Lock()
-_idle_preview_proc    = None        # FFmpeg ligero para preview sin grabar
-_idle_preview_running = False
-_idle_preview_lock    = threading.Lock()
-preview_q             = queue.Queue(maxsize=3)
-detection_q           = queue.Queue(maxsize=60)   # ~30s de buffer a 2fps
-preview_clients       = 0
-_preview_clients_lock = threading.Lock()
+running                    = False
+_force_cut                 = False
+ffmpeg_proc                = None
+ffmpeg_stderr_lines        = []     # stderr completo de la última sesión FFmpeg
+_audio_rms                 = 0.0    # RMS normalizado 0.0–1.0, actualizado por el hilo de audio
+_audio_lock                = threading.Lock()
+_idle_preview_proc         = None   # FFmpeg ligero para preview sin grabar
+_idle_preview_running      = False
+_idle_preview_lock         = threading.Lock()
+preview_q                  = queue.Queue(maxsize=3)
+detection_q                = queue.Queue(maxsize=60)   # ~30s de buffer a 2fps
+preview_clients            = 0
+_preview_clients_lock      = threading.Lock()
+current_recording_basename = ""     # nombre base resuelto (sin extensión) para la sesión en curso
+_start_lock                = threading.Lock()          # serializa /api/start contra dobles clicks
 
 # Constantes para lectura de audio RMS (8 kHz, mono, 16-bit)
 _AUDIO_RATE       = 8000
@@ -226,17 +229,83 @@ def _stop_idle_preview() -> None:
                 pass
 
 
+# ── Recording name sanitization / collision resolution ────────────────────────
+RECORDING_NAME_MAX_BYTES = 120
+_CONTROL_CHARS_RE  = re.compile(r"[\x00-\x1f\x7f]")
+_FS_HOSTILE_RE     = re.compile(r"[\\/:*?\"<>|]")
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
+_WIN_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def sanitize_recording_name(raw) -> str:
+    """Normaliza el nombre elegido por el usuario. Devuelve '' si queda inusable."""
+    if not isinstance(raw, str):
+        return ""
+    s = _CONTROL_CHARS_RE.sub("", raw)
+    s = _FS_HOSTILE_RE.sub(" ", s)
+    s = _WHITESPACE_RUN_RE.sub(" ", s)
+    s = s.strip(" .")
+    if not s or s.upper() in _WIN_RESERVED:
+        return ""
+    while len(s.encode("utf-8")) > RECORDING_NAME_MAX_BYTES:
+        s = s[:-1]
+    return s.rstrip(" .")
+
+
+def resolve_recording_basename(base: str) -> str:
+    """
+    Devuelve `base` si ningún archivo colisiona; si no, prueba `base (2)`, `(3)`, …
+    Considera colisión tanto `{base}.mp4` como cualquier `{base} - Segmento *.mp4`.
+    """
+    def taken(candidate: str) -> bool:
+        if os.path.exists(os.path.join(OUTPUT_DIR, f"{candidate}.mp4")):
+            return True
+        pattern = os.path.join(OUTPUT_DIR, f"{candidate} - Segmento *.mp4")
+        return bool(glob.glob(pattern))
+
+    if not taken(base):
+        return base
+    for n in range(2, 1000):
+        cand = f"{base} ({n})"
+        if not taken(cand):
+            return cand
+    return f"{base} ({datetime.now().strftime('%Y%m%d_%H%M%S')})"
+
+
+def _safe_output_filename(name: str) -> bool:
+    """Valida que `name` sea un MP4 dentro de OUTPUT_DIR sin path traversal."""
+    if not isinstance(name, str) or not name.endswith(".mp4"):
+        return False
+    if "/" in name or "\\" in name or name.startswith(".") or name.startswith("_session_"):
+        return False
+    full = os.path.realpath(os.path.join(OUTPUT_DIR, name))
+    root = os.path.realpath(OUTPUT_DIR) + os.sep
+    return full.startswith(root)
+
+
 # ── Segment cutting — stream copy, no re-encode ────────────────────────────────
-def cut_segments(session: str, segs: list) -> int:
-    saved = 0
+def cut_segments(session: str, segs: list, base_name: str) -> int:
+    """
+    Corta `session` en archivos basados en `base_name`.
+    - 1 segmento válido → `{base_name}.mp4`
+    - N>1 segmentos     → `{base_name} - Segmento {i}.mp4`
+    """
     min_dur = config.get("min_segment_secs", 2)
-    for i, (t0, t1) in enumerate(segs, 1):
+    kept = [(t0, t1) for (t0, t1) in segs if (t1 - t0) >= min_dur]
+    if not kept:
+        return 0
+
+    total = len(kept)
+    saved = 0
+    for i, (t0, t1) in enumerate(kept, 1):
         dur = t1 - t0
-        if dur < min_dur:
-            continue
-        ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = os.path.join(OUTPUT_DIR, f"vhs_seg_{i:03d}_{ts}.mp4")
-        state["message"] = f"Cortando segmento {i}/{len(segs)} ({int(dur)}s)..."
+        fname = f"{base_name}.mp4" if total == 1 else f"{base_name} - Segmento {i}.mp4"
+        out = os.path.join(OUTPUT_DIR, fname)
+        state["message"] = f"Cortando segmento {i}/{total} ({int(dur)}s)..."
         result = subprocess.run(
             ["ffmpeg", "-y",
              "-ss", f"{t0:.3f}", "-t", f"{dur:.3f}",
@@ -245,7 +314,7 @@ def cut_segments(session: str, segs: list) -> int:
              out],
             capture_output=True,
         )
-        if result.returncode == 0 and os.path.getsize(out) > 0:
+        if result.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 0:
             saved += 1
             state["segments_saved"] = saved
         else:
@@ -256,7 +325,7 @@ def cut_segments(session: str, segs: list) -> int:
 
 # ── Recorder thread ────────────────────────────────────────────────────────────
 def recorder_thread() -> None:
-    global running, ffmpeg_proc, _audio_rms
+    global running, ffmpeg_proc, _audio_rms, current_recording_basename
 
     _stop_idle_preview()   # libera el dispositivo V4L2 antes de capturar
 
@@ -270,6 +339,10 @@ def recorder_thread() -> None:
     ts           = datetime.now().strftime("%Y%m%d_%H%M%S")
     session_file = os.path.join(OUTPUT_DIR, f"_session_{ts}.mp4")
     frame_size   = DETECT_W * DETECT_H
+
+    # Nombre base fijado por /api/start; fallback defensivo si no está
+    base_name = current_recording_basename or f"vhs_{ts}"
+    state["recording_name"] = base_name
 
     # Snapshot de config al inicio (valores fijos durante la sesión)
     cfg = dict(config)
@@ -662,7 +735,7 @@ def recorder_thread() -> None:
                 state.update(status="processing",
                              message=f"Procesando {len(segments)} segmento(s) "
                                      f"(session: {session_mb:.1f} MB)...")
-                n = cut_segments(session_file, segments)
+                n = cut_segments(session_file, segments, base_name)
                 if n > 0:
                     cut_ok = True
                     state["message"] = f"Listo. {n} segmento(s) guardado(s)."
@@ -688,7 +761,8 @@ def recorder_thread() -> None:
         else:
             state["message"] = "Detenido (sin session file)."
 
-        state.update(status="idle", current_duration=0)
+        state.update(status="idle", current_duration=0, recording_name="")
+        current_recording_basename = ""
         running = False
         # Reiniciar preview ligero tras liberar el dispositivo V4L2
         threading.Timer(1.5, _start_idle_preview).start()
@@ -851,14 +925,22 @@ def api_audio_devices():
 
 @app.route("/api/start", methods=["POST"])
 def api_start():
-    global running
-    if running:
-        return jsonify({"ok": False, "msg": "Ya está corriendo"})
-    running = True
-    state.update(segments_found=0, segments_saved=0, current_duration=0,
-                 status="idle", message="Iniciando...", last_error="")
-    threading.Thread(target=recorder_thread, daemon=True).start()
-    return jsonify({"ok": True})
+    global running, current_recording_basename
+    with _start_lock:
+        if running:
+            return jsonify({"ok": False, "msg": "Ya está corriendo"}), 409
+        data = request.get_json(silent=True) or {}
+        clean = sanitize_recording_name(data.get("name", ""))
+        if not clean:
+            return jsonify({"ok": False, "msg": "Nombre requerido"}), 400
+        resolved = resolve_recording_basename(clean)
+        current_recording_basename = resolved
+        running = True
+        state.update(segments_found=0, segments_saved=0, current_duration=0,
+                     status="idle", message=f"Iniciando '{resolved}'...",
+                     last_error="", recording_name=resolved)
+        threading.Thread(target=recorder_thread, daemon=True).start()
+    return jsonify({"ok": True, "resolved_name": resolved})
 
 
 @app.route("/api/stop", methods=["POST"])
@@ -901,7 +983,8 @@ def api_preview_stop():
 @app.route("/api/library")
 def api_library():
     files = sorted(
-        glob.glob(os.path.join(OUTPUT_DIR, "vhs_seg_*.mp4")),
+        (f for f in glob.glob(os.path.join(OUTPUT_DIR, "*.mp4"))
+         if not os.path.basename(f).startswith("_session_")),
         key=os.path.getmtime,
         reverse=True,
     )
@@ -918,7 +1001,7 @@ def api_library():
 
 @app.route("/video/<path:filename>")
 def serve_video(filename):
-    if not filename.startswith("vhs_seg_"):
+    if not _safe_output_filename(filename):
         return "Not found", 404
     path = os.path.join(OUTPUT_DIR, filename)
     if os.path.exists(path):
@@ -928,7 +1011,7 @@ def serve_video(filename):
 
 @app.route("/download/<path:filename>")
 def download_video(filename):
-    if not filename.startswith("vhs_seg_"):
+    if not _safe_output_filename(filename):
         return "Not found", 404
     path = os.path.join(OUTPUT_DIR, filename)
     if os.path.exists(path):
@@ -939,7 +1022,7 @@ def download_video(filename):
 
 @app.route("/thumbnail/<path:filename>")
 def serve_thumbnail(filename):
-    if not filename.startswith("vhs_seg_"):
+    if not _safe_output_filename(filename):
         return "Not found", 404
     src = os.path.join(OUTPUT_DIR, filename)
     if not os.path.exists(src):
@@ -958,7 +1041,7 @@ def serve_thumbnail(filename):
 
 def _delete_file(name: str) -> bool:
     """Elimina el archivo de video y su thumbnail cacheado. Retorna True si el archivo existía."""
-    if not name.startswith("vhs_seg_"):
+    if not _safe_output_filename(name):
         return False
     path = os.path.join(OUTPUT_DIR, name)
     if not os.path.exists(path):
@@ -990,7 +1073,7 @@ def download_bulk():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
         for name in names:
-            if not name.startswith("vhs_seg_"):
+            if not _safe_output_filename(name):
                 continue
             path = os.path.join(OUTPUT_DIR, name)
             if os.path.exists(path):

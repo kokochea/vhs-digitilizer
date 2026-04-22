@@ -146,8 +146,17 @@
     .btn-drive { padding: 5px 12px; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
     .btn-drive:hover { background: #2563eb; }
     .btn-drive:disabled { opacity: .4; cursor: not-allowed; }
-    .drive-progress { height: 3px; background: #222; border-radius: 2px; margin-top: 4px; overflow: hidden; display: none; }
+    .drive-progress { height: 6px; background: #1e3a5f; border-radius: 3px; margin-top: 5px; overflow: hidden; display: none; }
     .drive-progress-fill { height: 100%; background: #3b82f6; transition: width .3s; width: 0%; }
+    .drive-toast { position: fixed; bottom: 80px; right: 24px; background: #1f2937; border: 1px solid #374151;
+      border-radius: 12px; padding: 14px 18px; min-width: 280px; z-index: 300;
+      box-shadow: 0 4px 20px rgba(0,0,0,.7); display: none; }
+    .drive-toast.visible { display: block; }
+    .drive-toast-title { font-size: 13px; font-weight: 600; color: #eee; margin-bottom: 8px; }
+    .drive-toast-file { font-size: 12px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
+    .drive-toast-bar-wrap { background: #111; border-radius: 3px; height: 6px; overflow: hidden; margin-bottom: 6px; }
+    .drive-toast-bar { height: 100%; background: #3b82f6; transition: width .3s; width: 0%; }
+    .drive-toast-status { font-size: 11px; color: #6b7280; }
     /* ── Modal carpetas Drive ─────────────────────────────────────────── */
     .folder-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 200; align-items: center; justify-content: center; }
     .folder-modal.open { display: flex; }
@@ -474,6 +483,13 @@
       <button class="btn btn-start"   style="padding:8px 16px;font-size:13px" onclick="confirmFolderSelection()">Subir aquí</button>
     </div>
   </div>
+</div>
+
+<div class="drive-toast" id="drive-toast">
+  <div class="drive-toast-title" id="drive-toast-title">Subiendo a Google Drive…</div>
+  <div class="drive-toast-file" id="drive-toast-file"></div>
+  <div class="drive-toast-bar-wrap"><div class="drive-toast-bar" id="drive-toast-bar"></div></div>
+  <div class="drive-toast-status" id="drive-toast-status"></div>
 </div>
 
 <div class="modal" id="modal">
@@ -1135,20 +1151,49 @@ function driveUploadOne(filename) {
   openFolderModal({ file: filename });
 }
 
-async function _uploadOneFile(filename, folderId) {
+function _toastShow(title) {
+  const t = document.getElementById("drive-toast");
+  document.getElementById("drive-toast-title").textContent = title;
+  t.classList.add("visible");
+}
+function _toastUpdate(filename, pct, status) {
+  document.getElementById("drive-toast-file").textContent  = filename;
+  document.getElementById("drive-toast-bar").style.width   = pct + "%";
+  document.getElementById("drive-toast-status").textContent = status;
+}
+function _toastHide() {
+  document.getElementById("drive-toast").classList.remove("visible");
+}
+
+async function _uploadOneFile(filename, folderId, { silent = false } = {}) {
   const safeId = CSS.escape(filename);
-  const btn  = document.getElementById(`drive-btn-${safeId}`) || document.getElementById(`drive-btn-g-${safeId}`);
-  const prog = document.getElementById(`drive-prog-${safeId}`);
-  const fill = document.getElementById(`drive-fill-${safeId}`);
-  if (btn)  { btn.disabled = true; btn.textContent = "Subiendo…"; }
+  const btnT   = document.getElementById(`drive-btn-${safeId}`);
+  const btnG   = document.getElementById(`drive-btn-g-${safeId}`);
+  const prog   = document.getElementById(`drive-prog-${safeId}`);
+  const fill   = document.getElementById(`drive-fill-${safeId}`);
+
+  const setBtn = (text, disabled) => {
+    [btnT, btnG].forEach(b => { if (b) { b.textContent = text; b.disabled = disabled; } });
+  };
+  setBtn("0% ⬆", true);
   if (prog) prog.style.display = "";
+  if (!silent) {
+    _toastShow("Subiendo a Google Drive…");
+    _toastUpdate(filename, 0, "Iniciando…");
+  }
+
   const pollId = setInterval(async () => {
     try {
       const p   = await (await fetch("/api/drive/upload-progress")).json();
       const pct = p[filename] ?? null;
-      if (fill && pct !== null) fill.style.width = pct + "%";
+      if (pct !== null) {
+        if (fill) fill.style.width = pct + "%";
+        setBtn(`${pct}% ⬆`, true);
+        if (!silent) _toastUpdate(filename, pct, `${pct}%`);
+      }
     } catch (e) {}
   }, 800);
+
   try {
     const r = await fetch("/api/drive/upload", {
       method: "POST",
@@ -1157,13 +1202,18 @@ async function _uploadOneFile(filename, folderId) {
     });
     const d = await r.json();
     clearInterval(pollId);
-    if (btn)  { btn.disabled = false; btn.textContent = d.ok ? "✓ Subido" : "⬆ Drive"; }
-    if (prog) prog.style.display = "none";
+    if (prog) { fill.style.width = d.ok ? "100%" : "0%"; }
+    setBtn(d.ok ? "✓ Subido" : "⬆ Drive", false);
+    if (!silent) _toastHide();
+    if (prog) setTimeout(() => { prog.style.display = "none"; }, 600);
     if (!d.ok) alert(`Error al subir ${filename}: ${d.msg}`);
+    return d.ok;
   } catch (e) {
     clearInterval(pollId);
-    if (btn)  { btn.disabled = false; btn.textContent = "⬆ Drive"; }
+    setBtn("⬆ Drive", false);
     if (prog) prog.style.display = "none";
+    if (!silent) _toastHide();
+    return false;
   }
 }
 
@@ -1176,19 +1226,63 @@ function driveUploadBulk() {
 }
 
 async function _uploadBulkFiles(files, folderId) {
-  const r = await fetch("/api/drive/upload-bulk", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ files, folder_id: folderId }),
-  });
-  const d = await r.json();
-  if (!d.ok) { alert(d.msg); return; }
-  const errors = d.results.filter(r => !r.ok);
+  const errors = [];
+  _toastShow(`Subiendo a Google Drive — 0 / ${files.length}`);
+  for (let i = 0; i < files.length; i++) {
+    const filename = files[i];
+    _toastUpdate(filename, 0, `Archivo ${i + 1} de ${files.length}`);
+    document.getElementById("drive-toast-title").textContent =
+      `Subiendo a Drive — ${i + 1} / ${files.length}`;
+
+    // Actualizar barra del toast con el progreso del archivo actual
+    const safeId = CSS.escape(filename);
+    const fill   = document.getElementById(`drive-fill-${safeId}`);
+    const prog   = document.getElementById(`drive-prog-${safeId}`);
+    const btnT   = document.getElementById(`drive-btn-${safeId}`);
+    const btnG   = document.getElementById(`drive-btn-g-${safeId}`);
+    const setBtn = (text, disabled) => {
+      [btnT, btnG].forEach(b => { if (b) { b.textContent = text; b.disabled = disabled; } });
+    };
+    setBtn("0% ⬆", true);
+    if (prog) prog.style.display = "";
+
+    const pollId = setInterval(async () => {
+      try {
+        const p   = await (await fetch("/api/drive/upload-progress")).json();
+        const pct = p[filename] ?? null;
+        if (pct !== null) {
+          if (fill) fill.style.width = pct + "%";
+          setBtn(`${pct}% ⬆`, true);
+          _toastUpdate(filename, pct, `Archivo ${i + 1} de ${files.length} — ${pct}%`);
+        }
+      } catch (e) {}
+    }, 800);
+
+    try {
+      const r = await fetch("/api/drive/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, folder_id: folderId }),
+      });
+      const d = await r.json();
+      clearInterval(pollId);
+      if (fill) fill.style.width = d.ok ? "100%" : "0%";
+      setBtn(d.ok ? "✓ Subido" : "⬆ Drive", false);
+      setTimeout(() => { if (prog) prog.style.display = "none"; }, 600);
+      if (!d.ok) errors.push(`${filename}: ${d.msg}`);
+    } catch (e) {
+      clearInterval(pollId);
+      setBtn("⬆ Drive", false);
+      if (prog) prog.style.display = "none";
+      errors.push(`${filename}: error de red`);
+    }
+  }
+
+  _toastHide();
   if (errors.length) {
-    alert(`${files.length - errors.length} subido(s) OK.\nErrores:\n` +
-          errors.map(e => `${e.filename}: ${e.msg}`).join("\n"));
+    alert(`${files.length - errors.length} subido(s) OK.\nErrores:\n${errors.join("\n")}`);
   } else {
-    alert(`${files.length} archivo(s) subidos a Google Drive correctamente.`);
+    alert(`✓ ${files.length} archivo(s) subidos a Google Drive correctamente.`);
   }
 }
 

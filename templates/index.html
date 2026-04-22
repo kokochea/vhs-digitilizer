@@ -1099,7 +1099,10 @@ async function _navigateDrive(folderId, folderName) {
     _currentFolderList = d.folders;
     _renderFolderList(_currentFolderList);
   } catch (e) {
-    list.innerHTML = '<div class="empty">Error al cargar carpetas</div>';
+    list.innerHTML = `<div class="empty" style="padding:16px">
+      Error al cargar carpetas<br>
+      <button class="btn-drive" style="margin-top:10px" onclick="_navigateDrive('${folderId}','${(folderName||'').replace(/'/g,"\\'")}')">↺ Reintentar</button>
+    </div>`;
   }
 }
 

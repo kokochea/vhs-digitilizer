@@ -1125,7 +1125,8 @@ def drive_auth_start():
             client_config, scopes=DRIVE_SCOPES, redirect_uri=redirect_uri,
         )
         auth_url, state = flow.authorization_url(access_type="offline", prompt="consent")
-        # Guardar solo los datos serializables (sin el objeto Flow)
+        # PKCE: guardar code_verifier generado por la librería para usarlo en el callback
+        code_verifier = getattr(flow.oauth2session, "_code_verifier", None)
         flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.json")
         with open(flow_file, "w") as f:
             json.dump({
@@ -1133,6 +1134,7 @@ def drive_auth_start():
                 "client_secret": client_secret,
                 "redirect_uri":  redirect_uri,
                 "state":         state,
+                "code_verifier": code_verifier,
             }, f)
         return jsonify({"ok": True, "auth_url": auth_url})
     except Exception as e:
@@ -1161,7 +1163,10 @@ def drive_callback():
         flow = _GFlow.from_client_config(
             client_config, scopes=DRIVE_SCOPES, redirect_uri=redirect_uri,
         )
-        flow.fetch_token(code=code)
+        code_verifier = data.get("code_verifier")
+        if code_verifier:
+            flow.oauth2session._code_verifier = code_verifier
+        flow.fetch_token(code=code, code_verifier=code_verifier)
         creds = flow.credentials
         _drive_save_creds(creds, client_id, client_secret)
         os.remove(flow_file)

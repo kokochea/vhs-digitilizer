@@ -100,7 +100,7 @@ state = {
 
 # ── Google Drive state ─────────────────────────────────────────────────────────
 DRIVE_CREDS_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drive_creds.json")
-DRIVE_SCOPES        = ["https://www.googleapis.com/auth/drive.file"]
+DRIVE_SCOPES        = ["https://www.googleapis.com/auth/drive"]
 _drive_credentials  = None   # google.oauth2.credentials.Credentials o None
 _drive_service      = None   # googleapiclient.discovery.Resource o None
 _drive_upload_prog  = {}     # {filename: 0-100} — progreso de subidas activas

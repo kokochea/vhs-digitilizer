@@ -125,6 +125,42 @@
     #disk-info { font-size: 12px; color: #555; margin-left: auto; }
     .btn-cut { background: #92400e; color: #fcd34d; }
     .btn-cut:hover { background: #b45309; }
+    /* ── Nombre de grabación ─────────────────────────────────────────── */
+    .recording-name-row { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
+    .recording-name-row label { font-size: 13px; color: #ccc; white-space: nowrap; }
+    .recording-name-input { flex: 1; background: #111; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 9px 14px; font-size: 14px; outline: none; }
+    .recording-name-input:focus { border-color: #3b82f6; }
+    .recording-name-input.error { border-color: #ef4444; animation: shake .25s; }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
+    .session-tag { font-size: 12px; color: #6b7280; margin-top: 8px; }
+    .session-tag span { color: #a78bfa; font-weight: 600; }
+    /* ── Google Drive ────────────────────────────────────────────────── */
+    .drive-panel { background: #111; border-radius: 8px; padding: 16px; margin-top: 20px; }
+    .drive-panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #666; margin-bottom: 14px; }
+    .drive-status-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .drive-dot { width: 8px; height: 8px; border-radius: 50%; background: #555; flex-shrink: 0; }
+    .drive-dot.connected { background: #22c55e; }
+    .drive-creds { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+    .drive-creds input { background: #1a1a1a; color: #eee; border: 1px solid #333; border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 100%; }
+    .drive-creds input:focus { outline: none; border-color: #3b82f6; }
+    .btn-drive { padding: 5px 12px; background: #1d4ed8; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
+    .btn-drive:hover { background: #2563eb; }
+    .btn-drive:disabled { opacity: .4; cursor: not-allowed; }
+    .drive-progress { height: 3px; background: #222; border-radius: 2px; margin-top: 4px; overflow: hidden; display: none; }
+    .drive-progress-fill { height: 100%; background: #3b82f6; transition: width .3s; width: 0%; }
+    /* ── Modal carpetas Drive ─────────────────────────────────────────── */
+    .folder-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 200; align-items: center; justify-content: center; }
+    .folder-modal.open { display: flex; }
+    .folder-modal-inner { background: #1a1a1a; border-radius: 12px; padding: 20px; width: 480px; max-width: 95%; }
+    .folder-modal-inner h3 { font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+    .folder-breadcrumb { font-size: 12px; color: #6b7280; margin-bottom: 12px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+    .folder-breadcrumb .bc-item { cursor: pointer; color: #3b82f6; }
+    .folder-breadcrumb .bc-item.current { color: #eee; cursor: default; }
+    .folder-list { max-height: 280px; overflow-y: auto; border: 1px solid #2a2a2a; border-radius: 8px; }
+    .folder-item { padding: 10px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px; border-bottom: 1px solid #1f1f1f; }
+    .folder-item:last-child { border-bottom: none; }
+    .folder-item:hover { background: #222; }
+    .folder-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   </style>
 </head>
 <body>
@@ -173,6 +209,15 @@
         <div class="cut-progress-label" id="cut-progress-label">Cortando en…</div>
         <progress class="cut-bar" id="cut-bar" max="100" value="0"></progress>
       </div>
+    </div>
+    <div class="recording-name-row" id="name-row">
+      <label for="recording-name">Nombre:</label>
+      <input type="text" id="recording-name" class="recording-name-input"
+             placeholder="Ej: Vacaciones Roma 1995, Cumpleaños de Juan…"
+             maxlength="100" oninput="this.classList.remove('error')">
+    </div>
+    <div class="session-tag" id="session-tag" style="display:none">
+      Grabando: <span id="session-tag-name"></span>
     </div>
     <div class="btn-row">
       <button class="btn btn-start"   id="btn-start"   onclick="startRecording()">▶ Iniciar</button>
@@ -369,6 +414,24 @@
       <span class="cfg-notice">Los cambios de detección se aplican de inmediato. Los de codificación, en la próxima grabación.</span>
       <span class="cfg-saved" id="cfg-saved">✓ Guardado</span>
     </div>
+
+    <div class="drive-panel">
+      <h3>Google Drive</h3>
+      <div class="drive-status-row">
+        <div class="drive-dot" id="drive-dot"></div>
+        <span id="drive-status-text" style="font-size:13px;color:#aaa">No conectado</span>
+        <button class="btn-drive" id="btn-drive-connect" onclick="driveConnect()">Conectar</button>
+        <button class="btn-drive" id="btn-drive-disconnect" onclick="driveDisconnect()" style="display:none;background:#7f1d1d">Desconectar</button>
+      </div>
+      <div class="drive-creds" id="drive-creds-form">
+        <input type="text"     id="drive-client-id"     placeholder="client_id de Google Cloud Console" autocomplete="off">
+        <input type="password" id="drive-client-secret" placeholder="client_secret" autocomplete="off">
+        <div style="font-size:11px;color:#555">Crea credenciales OAuth2 en <em>console.cloud.google.com</em> → APIs → Credenciales → Aplicación web, y agrega <code>http://localhost:5000/api/drive/callback</code> como URI de redirección.</div>
+      </div>
+      <div id="drive-unavailable" style="display:none;font-size:12px;color:#ef4444;margin-top:8px">
+        Instala <code>google-api-python-client google-auth-oauthlib</code> para habilitar esta función.
+      </div>
+    </div>
     </div><!-- /card-body cfg -->
   </div>
 </div>
@@ -376,8 +439,24 @@
 <div class="bulk-bar hidden" id="bulk-bar">
   <span class="bulk-count" id="bulk-count">0 seleccionados</span>
   <button class="bulk-zip" onclick="downloadSelected()">↓ Descargar ZIP</button>
+  <button class="btn-drive" id="btn-bulk-drive" onclick="driveUploadBulk()" style="padding:7px 14px;font-size:13px">⬆ Drive</button>
   <button class="bulk-del" onclick="deleteSelected()">🗑 Eliminar</button>
   <button class="bulk-clear" onclick="clearSelection()" title="Deseleccionar todo">✕</button>
+</div>
+
+<div class="folder-modal" id="folder-modal">
+  <div class="folder-modal-inner">
+    <button class="modal-close" onclick="closeFolderModal()" style="float:right">✕</button>
+    <h3>Seleccionar carpeta de destino</h3>
+    <div class="folder-breadcrumb" id="folder-breadcrumb"></div>
+    <div class="folder-list" id="folder-list">
+      <div class="empty" style="padding:20px">Cargando…</div>
+    </div>
+    <div class="folder-actions">
+      <button class="btn btn-preview" style="padding:8px 16px;font-size:13px" onclick="closeFolderModal()">Cancelar</button>
+      <button class="btn btn-start"   style="padding:8px 16px;font-size:13px" onclick="confirmFolderSelection()">Subir aquí</button>
+    </div>
+  </div>
 </div>
 
 <div class="modal" id="modal">
@@ -483,6 +562,16 @@ async function fetchStatus() {
       d.status === "idle" || d.status === "processing";
     document.getElementById("btn-cut").style.display =
       d.status === "recording" ? "" : "none";
+
+    // Mostrar input de nombre solo cuando idle
+    document.getElementById("name-row").style.display = busy ? "none" : "";
+    const sessionTag = document.getElementById("session-tag");
+    if (busy && d.recording_name) {
+      document.getElementById("session-tag-name").textContent = d.recording_name;
+      sessionTag.style.display = "";
+    } else {
+      sessionTag.style.display = "none";
+    }
   } catch (e) {}
 }
 
@@ -556,10 +645,12 @@ function renderLibrary() {
           <td>${fmtDuration(f.duration)}</td>
           <td>${f.size_mb} MB</td>
           <td>${f.date}</td>
-          <td style="display:flex;gap:6px;align-items:center;">
+          <td style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <button class="play-btn" onclick="playVideo('${f.name}')">▶ Ver</button>
             <a class="dl-btn" href="/download/${f.name}">↓ Descargar</a>
+            <button class="btn-drive" id="drive-btn-${CSS.escape(f.name)}" onclick="driveUploadOne('${f.name}')">⬆ Drive</button>
             <button class="del-btn" onclick="deleteFile('${f.name}')">🗑</button>
+            <div class="drive-progress" id="drive-prog-${CSS.escape(f.name)}"><div class="drive-progress-fill" id="drive-fill-${CSS.escape(f.name)}"></div></div>
           </td>
         </tr>`).join("")}
       </tbody></table>`;
@@ -580,9 +671,10 @@ function renderLibrary() {
             <span>${f.size_mb} MB</span>
           </div>
           <div class="gallery-meta" style="margin-top:2px">${f.date}</div>
-          <div class="gallery-actions">
+          <div class="gallery-actions" style="flex-wrap:wrap;">
             <button class="play-btn" onclick="playVideo('${f.name}')">▶ Ver</button>
             <a class="dl-btn" href="/download/${f.name}">↓ Descargar</a>
+            <button class="btn-drive" id="drive-btn-g-${CSS.escape(f.name)}" onclick="driveUploadOne('${f.name}')">⬆ Drive</button>
             <button class="del-btn" onclick="deleteFile('${f.name}')">🗑</button>
           </div>
         </div>
@@ -661,7 +753,26 @@ function closeModal() {
 }
 
 async function startRecording() {
-  await fetch("/api/start", { method: "POST" });
+  const inp  = document.getElementById("recording-name");
+  const name = inp.value.trim();
+  if (!name) {
+    inp.classList.add("error");
+    inp.focus();
+    return;
+  }
+  const r = await fetch("/api/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const d = await r.json();
+  if (!d.ok) {
+    alert(d.msg || "Error al iniciar");
+    return;
+  }
+  document.getElementById("session-tag-name").textContent = name;
+  document.getElementById("session-tag").style.display    = "";
+  document.getElementById("name-row").style.display       = "none";
 }
 async function stopRecording() {
   await fetch("/api/stop", { method: "POST" });
@@ -831,6 +942,193 @@ setInterval(fetchLibrary, 5000);
 fetchStatus();
 fetchLibrary();
 loadConfig();
+
+// ── Google Drive ──────────────────────────────────────────────────────────────
+let driveConnected     = false;
+let _driveBreadcrumb   = [{ id: "root", name: "Mi unidad" }];
+let _driveCurrentFolder = { id: "root", name: "Mi unidad" };
+let _driveUploadQueue  = null;   // { file: "..." } | { files: [...] }
+
+async function fetchDriveStatus() {
+  try {
+    const d = await (await fetch("/api/drive/status")).json();
+    driveConnected = d.connected;
+    const dot  = document.getElementById("drive-dot");
+    const text = document.getElementById("drive-status-text");
+    const btnC = document.getElementById("btn-drive-connect");
+    const btnD = document.getElementById("btn-drive-disconnect");
+    const form = document.getElementById("drive-creds-form");
+    const unavail = document.getElementById("drive-unavailable");
+    if (!d.available) {
+      unavail.style.display = "";
+      form.style.display    = "none";
+      btnC.style.display    = "none";
+      return;
+    }
+    unavail.style.display = "none";
+    if (d.connected) {
+      dot.classList.add("connected");
+      text.textContent   = `Conectado: ${d.email}`;
+      btnC.style.display = "none";
+      btnD.style.display = "";
+      form.style.display = "none";
+    } else {
+      dot.classList.remove("connected");
+      text.textContent   = "No conectado";
+      btnC.style.display = "";
+      btnD.style.display = "none";
+      form.style.display = "";
+    }
+  } catch (e) {}
+}
+
+async function driveConnect() {
+  const clientId     = document.getElementById("drive-client-id").value.trim();
+  const clientSecret = document.getElementById("drive-client-secret").value.trim();
+  if (!clientId || !clientSecret) { alert("Introduce client_id y client_secret"); return; }
+  const r = await fetch("/api/drive/auth/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(d.msg); return; }
+  const popup = window.open(d.auth_url, "drive_auth", "width=600,height=700,scrollbars=yes");
+  window.addEventListener("message", async (e) => {
+    if (e.data === "drive_connected") {
+      if (popup && !popup.closed) popup.close();
+      await fetchDriveStatus();
+    }
+  }, { once: true });
+}
+
+async function driveDisconnect() {
+  if (!confirm("¿Desconectar Google Drive?")) return;
+  await fetch("/api/drive/disconnect", { method: "POST" });
+  await fetchDriveStatus();
+}
+
+// ── Selector de carpetas ───────────────────────────────────────────────────────
+async function _navigateDrive(folderId, folderName) {
+  const list = document.getElementById("folder-list");
+  list.innerHTML = '<div class="empty" style="padding:20px">Cargando…</div>';
+  // Actualizar breadcrumb
+  const existIdx = _driveBreadcrumb.findIndex(b => b.id === folderId);
+  if (existIdx >= 0) {
+    _driveBreadcrumb = _driveBreadcrumb.slice(0, existIdx + 1);
+  } else {
+    _driveBreadcrumb.push({ id: folderId, name: folderName || folderId });
+  }
+  _driveCurrentFolder = { id: folderId, name: folderName || folderId };
+  const bc = document.getElementById("folder-breadcrumb");
+  bc.innerHTML = _driveBreadcrumb.map((b, i) => {
+    const isCurrent = i === _driveBreadcrumb.length - 1;
+    return isCurrent
+      ? `<span class="bc-item current">${b.name}</span>`
+      : `<span class="bc-item" onclick="_navigateDrive('${b.id}','${b.name.replace(/'/g,"\\'")}'')">${b.name}</span> /`;
+  }).join(" ");
+  try {
+    const r = await fetch(`/api/drive/folders?parent_id=${folderId}`);
+    const d = await r.json();
+    if (!d.ok) { list.innerHTML = `<div class="empty">${d.msg}</div>`; return; }
+    if (!d.folders.length) {
+      list.innerHTML = '<div class="empty" style="padding:16px;font-size:13px">Sin subcarpetas</div>';
+      return;
+    }
+    list.innerHTML = d.folders.map(f =>
+      `<div class="folder-item" onclick="_navigateDrive('${f.id}','${f.name.replace(/'/g,"\\'")}')">📁 ${f.name}</div>`
+    ).join("");
+  } catch (e) {
+    list.innerHTML = '<div class="empty">Error al cargar carpetas</div>';
+  }
+}
+
+function openFolderModal(queue) {
+  _driveUploadQueue   = queue;
+  _driveBreadcrumb    = [{ id: "root", name: "Mi unidad" }];
+  _driveCurrentFolder = { id: "root", name: "Mi unidad" };
+  document.getElementById("folder-modal").classList.add("open");
+  _navigateDrive("root");
+}
+
+function closeFolderModal() {
+  document.getElementById("folder-modal").classList.remove("open");
+  _driveUploadQueue = null;
+}
+
+async function confirmFolderSelection() {
+  if (!_driveUploadQueue) return;
+  const folderId = _driveCurrentFolder.id;
+  closeFolderModal();
+  if (_driveUploadQueue.file)  await _uploadOneFile(_driveUploadQueue.file, folderId);
+  if (_driveUploadQueue.files) await _uploadBulkFiles(_driveUploadQueue.files, folderId);
+}
+
+// ── Upload individual ──────────────────────────────────────────────────────────
+function driveUploadOne(filename) {
+  if (!driveConnected) { alert("Conecta Google Drive primero desde Configuración."); return; }
+  openFolderModal({ file: filename });
+}
+
+async function _uploadOneFile(filename, folderId) {
+  const safeId = CSS.escape(filename);
+  const btn  = document.getElementById(`drive-btn-${safeId}`) || document.getElementById(`drive-btn-g-${safeId}`);
+  const prog = document.getElementById(`drive-prog-${safeId}`);
+  const fill = document.getElementById(`drive-fill-${safeId}`);
+  if (btn)  { btn.disabled = true; btn.textContent = "Subiendo…"; }
+  if (prog) prog.style.display = "";
+  const pollId = setInterval(async () => {
+    try {
+      const p   = await (await fetch("/api/drive/upload-progress")).json();
+      const pct = p[filename] ?? null;
+      if (fill && pct !== null) fill.style.width = pct + "%";
+    } catch (e) {}
+  }, 800);
+  try {
+    const r = await fetch("/api/drive/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, folder_id: folderId }),
+    });
+    const d = await r.json();
+    clearInterval(pollId);
+    if (btn)  { btn.disabled = false; btn.textContent = d.ok ? "✓ Subido" : "⬆ Drive"; }
+    if (prog) prog.style.display = "none";
+    if (!d.ok) alert(`Error al subir ${filename}: ${d.msg}`);
+  } catch (e) {
+    clearInterval(pollId);
+    if (btn)  { btn.disabled = false; btn.textContent = "⬆ Drive"; }
+    if (prog) prog.style.display = "none";
+  }
+}
+
+// ── Upload masivo ──────────────────────────────────────────────────────────────
+function driveUploadBulk() {
+  if (!driveConnected) { alert("Conecta Google Drive primero desde Configuración."); return; }
+  const files = [...selected];
+  if (!files.length) return;
+  openFolderModal({ files });
+}
+
+async function _uploadBulkFiles(files, folderId) {
+  const r = await fetch("/api/drive/upload-bulk", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files, folder_id: folderId }),
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(d.msg); return; }
+  const errors = d.results.filter(r => !r.ok);
+  if (errors.length) {
+    alert(`${files.length - errors.length} subido(s) OK.\nErrores:\n` +
+          errors.map(e => `${e.filename}: ${e.msg}`).join("\n"));
+  } else {
+    alert(`${files.length} archivo(s) subidos a Google Drive correctamente.`);
+  }
+}
+
+fetchDriveStatus();
+setInterval(fetchDriveStatus, 30000);
 </script>
 </body>
 </html>

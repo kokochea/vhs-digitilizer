@@ -1,7 +1,18 @@
-import glob, io, json, os, queue, shutil, subprocess, threading, time, zipfile
+import glob, io, json, os, queue, re, shutil, subprocess, threading, time, unicodedata, zipfile
 import numpy as np
 from datetime import datetime
 from flask import Flask, jsonify, render_template, Response, send_file, request
+
+# ── Google Drive (opcional) ────────────────────────────────────────────────────
+try:
+    from google.oauth2.credentials import Credentials as _GCredentials
+    from google_auth_oauthlib.flow import Flow as _GFlow
+    from googleapiclient.discovery import build as _gbuild
+    from googleapiclient.http import MediaFileUpload as _GMediaUpload
+    import google.auth.transport.requests as _greq
+    DRIVE_AVAILABLE = True
+except ImportError:
+    DRIVE_AVAILABLE = False
 
 app = Flask(__name__)
 
@@ -53,6 +64,27 @@ _load_config()
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 
+
+# ── Filename helpers ───────────────────────────────────────────────────────────
+def _sanitize_recording_name(raw: str) -> str:
+    """Limpia el nombre definido por el usuario para usarlo como nombre de archivo."""
+    name = unicodedata.normalize("NFC", raw).strip()
+    name = re.sub(r'[/\\:*?"<>|\x00-\x1f]', "", name)
+    name = re.sub(r'\.\.+', "", name)
+    name = name.strip(". ")
+    name = re.sub(r'\s+', " ", name)
+    return name[:100]
+
+
+def _is_valid_library_file(name: str) -> bool:
+    """Evita path traversal: el nombre no debe contener separadores de path
+    y el archivo debe existir en OUTPUT_DIR."""
+    if not name or os.path.basename(name) != name:
+        return False
+    if not name.endswith(".mp4"):
+        return False
+    return os.path.exists(os.path.join(OUTPUT_DIR, name))
+
 # ── Shared state ───────────────────────────────────────────────────────────────
 state = {
     "status":           "idle",   # idle | recording | blank | processing
@@ -63,7 +95,15 @@ state = {
     "last_error":       "",       # último error de FFmpeg
     "last_cut_reason":  "",       # qué disparó el último corte
     "detect":           {"mean": 0.0, "var": 0.0, "diff": 0.0},  # métricas en tiempo real
+    "recording_name":   "",       # nombre definido por el usuario antes de iniciar
 }
+
+# ── Google Drive state ─────────────────────────────────────────────────────────
+DRIVE_CREDS_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drive_creds.json")
+DRIVE_SCOPES        = ["https://www.googleapis.com/auth/drive.file"]
+_drive_credentials  = None   # google.oauth2.credentials.Credentials o None
+_drive_service      = None   # googleapiclient.discovery.Resource o None
+_drive_upload_prog  = {}     # {filename: 0-100} — progreso de subidas activas
 running               = False
 _force_cut            = False
 ffmpeg_proc           = None
@@ -223,16 +263,32 @@ def _stop_idle_preview() -> None:
 
 
 # ── Segment cutting — stream copy, no re-encode ────────────────────────────────
-def cut_segments(session: str, segs: list) -> int:
+def _unique_path(base_name: str) -> str:
+    """Retorna una ruta en OUTPUT_DIR que no exista aún. Si ya existe agrega (2), (3)…"""
+    path = os.path.join(OUTPUT_DIR, base_name)
+    if not os.path.exists(path):
+        return path
+    stem = base_name[:-4]   # quitar ".mp4"
+    counter = 2
+    while True:
+        candidate = os.path.join(OUTPUT_DIR, f"{stem} ({counter}).mp4")
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
+
+
+def cut_segments(session: str, segs: list, recording_name: str = "") -> int:
     saved = 0
     min_dur = config.get("min_segment_secs", 2)
-    for i, (t0, t1) in enumerate(segs, 1):
+    valid = [(t0, t1) for t0, t1 in segs if (t1 - t0) >= min_dur]
+    for i, (t0, t1) in enumerate(valid, 1):
         dur = t1 - t0
-        if dur < min_dur:
-            continue
-        ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = os.path.join(OUTPUT_DIR, f"vhs_seg_{i:03d}_{ts}.mp4")
-        state["message"] = f"Cortando segmento {i}/{len(segs)} ({int(dur)}s)..."
+        if len(valid) == 1:
+            filename = f"{recording_name}.mp4"
+        else:
+            filename = f"{recording_name} - Segmento {i}.mp4"
+        out = _unique_path(filename)
+        state["message"] = f"Cortando segmento {i}/{len(valid)} ({int(dur)}s)..."
         result = subprocess.run(
             ["ffmpeg", "-y",
              "-ss", f"{t0:.3f}", "-t", f"{dur:.3f}",
@@ -251,7 +307,7 @@ def cut_segments(session: str, segs: list) -> int:
 
 
 # ── Recorder thread ────────────────────────────────────────────────────────────
-def recorder_thread() -> None:
+def recorder_thread(recording_name: str = "") -> None:
     global running, ffmpeg_proc, _audio_rms
 
     _stop_idle_preview()   # libera el dispositivo V4L2 antes de capturar
@@ -637,7 +693,7 @@ def recorder_thread() -> None:
                 state.update(status="processing",
                              message=f"Procesando {len(segments)} segmento(s) "
                                      f"(session: {session_mb:.1f} MB)...")
-                n = cut_segments(session_file, segments)
+                n = cut_segments(session_file, segments, recording_name)
                 if n > 0:
                     cut_ok = True
                     state["message"] = f"Listo. {n} segmento(s) guardado(s)."
@@ -663,7 +719,7 @@ def recorder_thread() -> None:
         else:
             state["message"] = "Detenido (sin session file)."
 
-        state.update(status="idle", current_duration=0)
+        state.update(status="idle", current_duration=0, recording_name="")
         running = False
         # Reiniciar preview ligero tras liberar el dispositivo V4L2
         threading.Timer(1.5, _start_idle_preview).start()
@@ -728,10 +784,15 @@ def api_start():
     global running
     if running:
         return jsonify({"ok": False, "msg": "Ya está corriendo"})
+    data = request.get_json(silent=True) or {}
+    name = _sanitize_recording_name(data.get("name", "").strip())
+    if not name:
+        return jsonify({"ok": False, "msg": "El nombre de la grabación es obligatorio"}), 400
     running = True
     state.update(segments_found=0, segments_saved=0, current_duration=0,
-                 status="idle", message="Iniciando...", last_error="")
-    threading.Thread(target=recorder_thread, daemon=True).start()
+                 status="idle", message="Iniciando...", last_error="",
+                 recording_name=name)
+    threading.Thread(target=recorder_thread, args=(name,), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -774,8 +835,10 @@ def api_preview_stop():
 
 @app.route("/api/library")
 def api_library():
+    # Excluir archivos temporales de sesión (prefijo "_")
     files = sorted(
-        glob.glob(os.path.join(OUTPUT_DIR, "vhs_seg_*.mp4")),
+        [f for f in glob.glob(os.path.join(OUTPUT_DIR, "*.mp4"))
+         if not os.path.basename(f).startswith("_")],
         key=os.path.getmtime,
         reverse=True,
     )
@@ -792,28 +855,24 @@ def api_library():
 
 @app.route("/video/<path:filename>")
 def serve_video(filename):
-    if not filename.startswith("vhs_seg_"):
+    if not _is_valid_library_file(filename):
         return "Not found", 404
     path = os.path.join(OUTPUT_DIR, filename)
-    if os.path.exists(path):
-        return send_file(path, mimetype="video/mp4")
-    return "Not found", 404
+    return send_file(path, mimetype="video/mp4")
 
 
 @app.route("/download/<path:filename>")
 def download_video(filename):
-    if not filename.startswith("vhs_seg_"):
+    if not _is_valid_library_file(filename):
         return "Not found", 404
     path = os.path.join(OUTPUT_DIR, filename)
-    if os.path.exists(path):
-        return send_file(path, mimetype="video/mp4", as_attachment=True,
-                         download_name=filename)
-    return "Not found", 404
+    return send_file(path, mimetype="video/mp4", as_attachment=True,
+                     download_name=filename)
 
 
 @app.route("/thumbnail/<path:filename>")
 def serve_thumbnail(filename):
-    if not filename.startswith("vhs_seg_"):
+    if not _is_valid_library_file(filename):
         return "Not found", 404
     src = os.path.join(OUTPUT_DIR, filename)
     if not os.path.exists(src):
@@ -832,7 +891,7 @@ def serve_thumbnail(filename):
 
 def _delete_file(name: str) -> bool:
     """Elimina el archivo de video y su thumbnail cacheado. Retorna True si el archivo existía."""
-    if not name.startswith("vhs_seg_"):
+    if not _is_valid_library_file(name):
         return False
     path = os.path.join(OUTPUT_DIR, name)
     if not os.path.exists(path):
@@ -864,11 +923,10 @@ def download_bulk():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
         for name in names:
-            if not name.startswith("vhs_seg_"):
+            if not _is_valid_library_file(name):
                 continue
             path = os.path.join(OUTPUT_DIR, name)
-            if os.path.exists(path):
-                zf.write(path, name)
+            zf.write(path, name)
     buf.seek(0)
     return send_file(buf, mimetype="application/zip",
                      as_attachment=True, download_name="vhs_seleccion.zip")
@@ -970,6 +1028,225 @@ def preview_feed():
             with _preview_clients_lock:
                 preview_clients -= 1
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+# ── Google Drive helpers ───────────────────────────────────────────────────────
+def _drive_save_creds(creds, client_id: str, client_secret: str) -> None:
+    with open(DRIVE_CREDS_FILE, "w") as f:
+        json.dump({
+            "token":          creds.token,
+            "refresh_token":  creds.refresh_token,
+            "client_id":      client_id,
+            "client_secret":  client_secret,
+        }, f, indent=2)
+
+
+def _drive_load_creds() -> bool:
+    global _drive_credentials, _drive_service
+    if not DRIVE_AVAILABLE or not os.path.exists(DRIVE_CREDS_FILE):
+        return False
+    try:
+        with open(DRIVE_CREDS_FILE) as f:
+            data = json.load(f)
+        creds = _GCredentials(
+            token=data.get("token"),
+            refresh_token=data["refresh_token"],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=data["client_id"],
+            client_secret=data["client_secret"],
+            scopes=DRIVE_SCOPES,
+        )
+        if creds.expired and creds.refresh_token:
+            creds.refresh(_greq.Request())
+            _drive_save_creds(creds, data["client_id"], data["client_secret"])
+        _drive_credentials = creds
+        _drive_service = _gbuild("drive", "v3", credentials=creds)
+        return True
+    except Exception:
+        return False
+
+
+def _drive_svc():
+    global _drive_service, _drive_credentials
+    if _drive_service is None:
+        _drive_load_creds()
+    if _drive_credentials and _drive_credentials.expired:
+        try:
+            _drive_credentials.refresh(_greq.Request())
+            _drive_service = _gbuild("drive", "v3", credentials=_drive_credentials)
+        except Exception:
+            _drive_service = None
+    return _drive_service
+
+
+_drive_load_creds()   # intentar cargar al arrancar
+
+
+# ── Google Drive routes ────────────────────────────────────────────────────────
+@app.route("/api/drive/status")
+def drive_status():
+    if not DRIVE_AVAILABLE:
+        return jsonify({"connected": False, "email": None, "available": False})
+    svc = _drive_svc()
+    if svc is None:
+        return jsonify({"connected": False, "email": None, "available": True})
+    try:
+        info  = svc.about().get(fields="user").execute()
+        email = info["user"]["emailAddress"]
+        return jsonify({"connected": True, "email": email, "available": True})
+    except Exception:
+        return jsonify({"connected": False, "email": None, "available": True})
+
+
+@app.route("/api/drive/auth/start", methods=["POST"])
+def drive_auth_start():
+    if not DRIVE_AVAILABLE:
+        return jsonify({"ok": False, "msg": "google-api-python-client no instalado"}), 400
+    data          = request.get_json(silent=True) or {}
+    client_id     = data.get("client_id", "").strip()
+    client_secret = data.get("client_secret", "").strip()
+    if not client_id or not client_secret:
+        return jsonify({"ok": False, "msg": "client_id y client_secret son obligatorios"}), 400
+    try:
+        import pickle
+        client_config = {"web": {
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "auth_uri":      "https://accounts.google.com/o/oauth2/auth",
+            "token_uri":     "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost:5000/api/drive/callback"],
+        }}
+        flow = _GFlow.from_client_config(
+            client_config, scopes=DRIVE_SCOPES,
+            redirect_uri="http://localhost:5000/api/drive/callback",
+        )
+        auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent")
+        flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.pkl")
+        with open(flow_file, "wb") as f:
+            pickle.dump({"flow": flow, "client_id": client_id, "client_secret": client_secret}, f)
+        return jsonify({"ok": True, "auth_url": auth_url})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/api/drive/callback")
+def drive_callback():
+    code = request.args.get("code")
+    if not code:
+        return "Error: no authorization code received", 400
+    try:
+        import pickle
+        flow_file = os.path.join(os.path.dirname(DRIVE_CREDS_FILE), "_drive_flow.pkl")
+        with open(flow_file, "rb") as f:
+            data = pickle.load(f)
+        flow          = data["flow"]
+        client_id     = data["client_id"]
+        client_secret = data["client_secret"]
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        _drive_save_creds(creds, client_id, client_secret)
+        os.remove(flow_file)
+        _drive_load_creds()
+        return (
+            "<html><body style='font-family:sans-serif;background:#0f0f0f;color:#eee;"
+            "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
+            "<div style='text-align:center'><h2 style='color:#22c55e'>✓ Conectado</h2>"
+            "<p>Puedes cerrar esta ventana.</p></div>"
+            "<script>window.opener&&window.opener.postMessage('drive_connected','*');"
+            "setTimeout(()=>window.close(),1500)</script></body></html>"
+        )
+    except Exception as e:
+        return f"<p style='color:red'>Error: {e}</p>", 500
+
+
+@app.route("/api/drive/disconnect", methods=["POST"])
+def drive_disconnect():
+    global _drive_credentials, _drive_service
+    _drive_credentials = None
+    _drive_service     = None
+    if os.path.exists(DRIVE_CREDS_FILE):
+        os.remove(DRIVE_CREDS_FILE)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/drive/folders")
+def drive_folders():
+    parent_id = request.args.get("parent_id", "root")
+    svc = _drive_svc()
+    if svc is None:
+        return jsonify({"ok": False, "msg": "No autenticado con Google Drive"}), 401
+    try:
+        q       = (f"'{parent_id}' in parents and "
+                   "mimeType='application/vnd.google-apps.folder' and trashed=false")
+        results = svc.files().list(
+            q=q, fields="files(id,name)", orderBy="name", pageSize=100
+        ).execute()
+        return jsonify({"ok": True, "folders": results.get("files", [])})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/api/drive/upload", methods=["POST"])
+def drive_upload():
+    data      = request.get_json(silent=True) or {}
+    filename  = data.get("filename", "")
+    folder_id = data.get("folder_id", "root")
+    if not _is_valid_library_file(filename):
+        return jsonify({"ok": False, "msg": "Archivo no válido"}), 400
+    svc = _drive_svc()
+    if svc is None:
+        return jsonify({"ok": False, "msg": "No autenticado con Google Drive"}), 401
+    path = os.path.join(OUTPUT_DIR, filename)
+    try:
+        media     = _GMediaUpload(path, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024)
+        file_meta = {"name": filename, "parents": [folder_id]}
+        req       = svc.files().create(body=file_meta, media_body=media, fields="id,name,webViewLink")
+        resp      = None
+        while resp is None:
+            status, resp = req.next_chunk()
+            if status:
+                _drive_upload_prog[filename] = int(status.progress() * 100)
+        _drive_upload_prog.pop(filename, None)
+        return jsonify({"ok": True, "file": resp})
+    except Exception as e:
+        _drive_upload_prog.pop(filename, None)
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/api/drive/upload-bulk", methods=["POST"])
+def drive_upload_bulk():
+    data      = request.get_json(silent=True) or {}
+    files     = data.get("files", [])
+    folder_id = data.get("folder_id", "root")
+    svc = _drive_svc()
+    if svc is None:
+        return jsonify({"ok": False, "msg": "No autenticado con Google Drive"}), 401
+    results = []
+    for filename in files:
+        if not _is_valid_library_file(filename):
+            results.append({"filename": filename, "ok": False, "msg": "Archivo no válido"})
+            continue
+        path = os.path.join(OUTPUT_DIR, filename)
+        try:
+            media     = _GMediaUpload(path, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024)
+            file_meta = {"name": filename, "parents": [folder_id]}
+            req       = svc.files().create(body=file_meta, media_body=media, fields="id,name")
+            resp      = None
+            while resp is None:
+                status, resp = req.next_chunk()
+                if status:
+                    _drive_upload_prog[filename] = int(status.progress() * 100)
+            _drive_upload_prog.pop(filename, None)
+            results.append({"filename": filename, "ok": True, "file": resp})
+        except Exception as e:
+            _drive_upload_prog.pop(filename, None)
+            results.append({"filename": filename, "ok": False, "msg": str(e)})
+    return jsonify({"ok": True, "results": results})
+
+
+@app.route("/api/drive/upload-progress")
+def drive_upload_progress():
+    return jsonify(_drive_upload_prog)
 
 
 if __name__ == "__main__":

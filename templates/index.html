@@ -1140,9 +1140,10 @@ function closeFolderModal() {
 async function confirmFolderSelection() {
   if (!_driveUploadQueue) return;
   const folderId = _driveCurrentFolder.id;
+  const queue    = _driveUploadQueue;   // guardar antes de cerrar el modal
   closeFolderModal();
-  if (_driveUploadQueue.file)  await _uploadOneFile(_driveUploadQueue.file, folderId);
-  if (_driveUploadQueue.files) await _uploadBulkFiles(_driveUploadQueue.files, folderId);
+  if (queue.file)  await _uploadOneFile(queue.file, folderId);
+  if (queue.files) await _uploadBulkFiles(queue.files, folderId);
 }
 
 // ── Upload individual ──────────────────────────────────────────────────────────

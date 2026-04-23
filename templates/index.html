@@ -135,6 +135,58 @@
     .btn-cut { background: #92400e; color: #fcd34d; }
     .btn-cut:hover { background: #b45309; }
 
+    /* ── Drive / uploads ────────────────────────────────────────────── */
+    .drive-banner { background:#1e3a5f; color:#bfdbfe; border:1px solid #2563eb; border-radius:8px; padding:12px 14px; font-size:13px; margin-bottom:12px; }
+    .drive-banner.warn { background:#78350f; color:#fcd34d; border-color:#b45309; }
+    .drive-banner code { background:rgba(0,0,0,.35); padding:1px 5px; border-radius:4px; font-size:12px; }
+    .drive-status-row { display:flex; gap:10px; align-items:center; font-size:12px; color:#9ca3af; flex-wrap:wrap; margin-top:6px; }
+    .drive-status-row .ok { color:#22c55e; }
+    .drive-status-row .warn { color:#f59e0b; }
+    .drive-status-row .bad { color:#ef4444; }
+    .up-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; white-space:nowrap; }
+    .up-badge.none  { background:#1f2937; color:#6b7280; }
+    .up-badge.queue { background:#374151; color:#d1d5db; }
+    .up-badge.live  { background:#1e3a5f; color:#bfdbfe; }
+    .up-badge.done  { background:#064e3b; color:#6ee7b7; }
+    .up-badge.err   { background:#7f1d1d; color:#fca5a5; cursor:pointer; }
+    .up-progress-inline { display:inline-block; vertical-align:middle; width:80px; height:4px; background:#1f2937; border-radius:2px; margin-left:6px; overflow:hidden; }
+    .up-progress-inline span { display:block; height:100%; background:#3b82f6; transition:width .4s; }
+    .bulk-drive { padding:7px 16px; background:#059669; color:#fff; border:none; border-radius:7px; cursor:pointer; font-size:13px; font-weight:600; }
+    .bulk-drive:hover { background:#047857; }
+    .bulk-drive:disabled { background:#374151; color:#6b7280; cursor:not-allowed; }
+    .uploads-list { display:flex; flex-direction:column; gap:8px; }
+    .upload-row { background:#111; border-radius:8px; padding:10px 12px; border:1px solid #1f1f1f; }
+    .upload-row-head { display:flex; justify-content:space-between; align-items:center; gap:10px; font-size:13px; }
+    .upload-row-name { color:#e5e7eb; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+    .upload-row-dest { color:#9ca3af; font-size:11px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .upload-row-status { font-size:11px; color:#9ca3af; white-space:nowrap; }
+    .upload-row progress { width:100%; height:6px; margin-top:8px; border-radius:3px; overflow:hidden; accent-color:#3b82f6; }
+    .upload-row.done progress { accent-color:#10b981; }
+    .upload-row.failed progress { accent-color:#ef4444; }
+    .upload-row-actions { display:flex; gap:6px; margin-top:6px; }
+    .upload-row-actions button { padding:4px 10px; font-size:11px; border:none; border-radius:5px; cursor:pointer; }
+    .upload-cancel { background:#374151; color:#d1d5db; }
+    .upload-retry  { background:#2563eb; color:#fff; }
+    .picker-modal .modal-inner { max-width:520px; }
+    .picker-crumb { display:flex; gap:6px; align-items:center; font-size:13px; color:#9ca3af; margin-bottom:10px; flex-wrap:wrap; }
+    .picker-crumb .seg { cursor:pointer; color:#bfdbfe; }
+    .picker-crumb .seg:hover { text-decoration:underline; }
+    .picker-list { max-height:40vh; overflow-y:auto; border:1px solid #2a2a2a; border-radius:8px; background:#0b0b0b; }
+    .picker-item { padding:10px 12px; cursor:pointer; border-bottom:1px solid #1a1a1a; display:flex; align-items:center; gap:8px; font-size:14px; color:#e5e7eb; }
+    .picker-item:last-child { border-bottom:none; }
+    .picker-item:hover { background:#1a1a1a; }
+    .picker-empty { color:#666; padding:20px; text-align:center; font-size:13px; }
+    .picker-actions { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
+    .picker-new { flex:1; min-width:180px; display:flex; gap:6px; }
+    .picker-new input { flex:1; padding:8px 10px; background:#111; color:#eee; border:1px solid #333; border-radius:6px; font-size:13px; }
+    .picker-new button { padding:8px 12px; background:#374151; color:#d1d5db; border:none; border-radius:6px; cursor:pointer; font-size:12px; }
+    .picker-confirm { padding:8px 16px; background:#059669; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:13px; font-weight:600; }
+    .picker-cancel { padding:8px 16px; background:#374151; color:#d1d5db; border:none; border-radius:6px; cursor:pointer; font-size:13px; }
+    @media (max-width: 480px) {
+      .bulk-drive { padding: 8px 10px; font-size: 12px; }
+      .up-progress-inline { width: 50px; }
+    }
+
     @media (max-width: 768px) {
       .container         { padding: 12px; }
       .card              { padding: 14px; margin-bottom: 14px; }
@@ -254,7 +306,19 @@
       <button class="card-toggle" id="toggle-lib" title="Colapsar/expandir">▾</button>
     </div>
     <div class="card-body" id="body-lib">
+      <div id="drive-banner-slot"></div>
       <div id="library-content"><div class="empty">No hay archivos grabados aún.</div></div>
+    </div>
+  </div>
+
+  <div class="card" id="uploads-card" style="display:none">
+    <div class="card-collapsible-header" onclick="toggleCard('up')">
+      <h2>Subidas a Drive</h2>
+      <button class="card-toggle" id="toggle-up" title="Colapsar/expandir">▾</button>
+    </div>
+    <div class="card-body" id="body-up">
+      <div class="drive-status-row" id="drive-status-row"></div>
+      <div class="uploads-list" id="uploads-list"></div>
     </div>
   </div>
 
@@ -442,6 +506,30 @@
         </div>
       </div>
 
+      <div class="cfg-group">
+        <h3>Google Drive</h3>
+
+        <div class="cfg-row">
+          <div class="cfg-label">Nombre del remote rclone</div>
+          <div class="cfg-desc">El nombre del remote configurado en rclone (ej: <code>drive</code>). Ejecuta <code>rclone listremotes</code> en el host para verlo.</div>
+          <input type="text" id="cfg-drive-remote" maxlength="40"
+                 style="width:100%;padding:6px 10px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:6px;font-size:13px">
+        </div>
+
+        <div class="cfg-row">
+          <div class="cfg-toggle">
+            <label class="toggle-switch">
+              <input type="checkbox" id="cfg-drive-auto-delete">
+              <span class="toggle-slider"></span>
+            </label>
+            <div>
+              <div class="cfg-label" style="margin-bottom:2px">Borrar local tras subida verificada</div>
+              <div class="cfg-desc">Si está activado, el MP4 local se elimina solo cuando rclone confirma que la subida fue exitosa (con checksum).</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
     <div class="cfg-save">
       <button class="btn btn-start" style="padding:8px 20px;font-size:13px" onclick="saveConfig()">Guardar configuración</button>
@@ -454,6 +542,7 @@
 
 <div class="bulk-bar hidden" id="bulk-bar">
   <span class="bulk-count" id="bulk-count">0 seleccionados</span>
+  <button class="bulk-drive" id="bulk-drive" onclick="uploadSelectedToDrive()" disabled title="Subir a Google Drive">☁ Subir a Drive</button>
   <button class="bulk-zip" onclick="downloadSelected()">↓ Descargar ZIP</button>
   <button class="bulk-del" onclick="deleteSelected()">🗑 Eliminar</button>
   <button class="bulk-clear" onclick="clearSelection()" title="Deseleccionar todo">✕</button>
@@ -463,6 +552,23 @@
   <div class="modal-inner">
     <button class="modal-close" onclick="closeModal()">✕</button>
     <video id="modal-video" controls></video>
+  </div>
+</div>
+
+<div class="modal picker-modal" id="picker-modal">
+  <div class="modal-inner">
+    <button class="modal-close" onclick="closePicker()">✕</button>
+    <h2 style="font-size:15px;color:#ccc;margin-bottom:10px;">Elegir carpeta en Drive</h2>
+    <div class="picker-crumb" id="picker-crumb"></div>
+    <div class="picker-list" id="picker-list"><div class="picker-empty">Cargando…</div></div>
+    <div class="picker-actions">
+      <div class="picker-new">
+        <input type="text" id="picker-new-name" placeholder="Nueva carpeta…" maxlength="80">
+        <button onclick="pickerCreateFolder()">+ Crear</button>
+      </div>
+      <button class="picker-cancel"  onclick="closePicker()">Cancelar</button>
+      <button class="picker-confirm" onclick="pickerConfirm()">Subir aquí</button>
+    </div>
   </div>
 </div>
 
@@ -620,6 +726,11 @@ function updateBulkBar() {
   bar.classList.remove("hidden");
   document.getElementById("bulk-count").textContent =
     count === 1 ? "1 seleccionado" : `${count} seleccionados`;
+  const drv = document.getElementById("bulk-drive");
+  if (drv) {
+    drv.disabled = !(_driveStatus && _driveStatus.available);
+    drv.title = drv.disabled ? "Drive no disponible" : "Subir a Google Drive";
+  }
 }
 
 function updateSelectionUI() {
@@ -645,21 +756,50 @@ function htmlEscape(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Devuelve el HTML del badge de subida para un archivo dado.
+// Considera tanto jobs activos (desde _driveJobs) como historial (f.uploads).
+function uploadBadgeFor(f) {
+  const active = (_driveJobs || []).filter(j => j.filename === f.name &&
+    (j.status === "queued" || j.status === "uploading"));
+  if (active.length) {
+    const j = active[0];
+    if (j.status === "queued") {
+      return `<span class="up-badge queue" title="En cola">⏳ en cola</span>`;
+    }
+    const pct = Math.round(j.progress || 0);
+    return `<span class="up-badge live" title="Subiendo a ${htmlEscape(j.destination || "/")}">↑ ${pct}%<span class="up-progress-inline"><span style="width:${pct}%"></span></span></span>`;
+  }
+  const failed = (_driveJobs || []).find(j => j.filename === f.name && j.status === "failed");
+  if (failed) {
+    return `<span class="up-badge err" title="${htmlEscape(failed.error || "Error")}" onclick="retryUpload('${htmlEscape(failed.id)}')">⚠ error</span>`;
+  }
+  const ups = f.uploads || [];
+  if (ups.length) {
+    const last = ups[ups.length - 1];
+    const dest = last.destination || "(raíz)";
+    const tip  = ups.map(u => `${u.destination || "(raíz)"} — ${u.uploaded_at}`).join("\n");
+    return `<span class="up-badge done" title="${htmlEscape(tip)}">☁ ${htmlEscape(dest)}</span>`;
+  }
+  return "";
+}
+
 function renderLibrary() {
   const el = document.getElementById("library-content");
   if (!libraryFiles.length) {
     el.innerHTML = '<div class="empty">No hay archivos grabados aún.</div>';
     return;
   }
+  const driveOn = (_driveStatus && _driveStatus.available);
   if (currentView === "table") {
     el.innerHTML = `<div class="table-scroll"><table>
       <thead><tr>
         <th><input type="checkbox" id="chk-all" onchange="toggleAll(this.checked)" title="Seleccionar todo"></th>
-        <th>Archivo</th><th>Duración</th><th>Tamaño</th><th>Fecha</th><th></th>
+        <th>Archivo</th><th>Duración</th><th>Tamaño</th><th>Fecha</th><th>Drive</th><th></th>
       </tr></thead>
       <tbody>${libraryFiles.map(f => {
         const nameEsc = htmlEscape(f.name);
         const nameUrl = encodeURIComponent(f.name);
+        const badge   = uploadBadgeFor(f);
         return `
         <tr data-name="${nameEsc}">
           <td><input type="checkbox" onchange="toggleSelect(this.closest('tr').dataset.name)" ${selected.has(f.name) ? "checked" : ""}></td>
@@ -667,9 +807,11 @@ function renderLibrary() {
           <td>${fmtDuration(f.duration)}</td>
           <td>${f.size_mb} MB</td>
           <td>${f.date}</td>
-          <td style="display:flex;gap:6px;align-items:center;">
+          <td>${badge || '<span class="up-badge none">—</span>'}</td>
+          <td style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
             <button class="play-btn" onclick="playVideo(this.closest('tr').dataset.name)">▶ Ver</button>
             <a class="dl-btn" href="/download/${nameUrl}">↓ Descargar</a>
+            ${driveOn ? `<button class="play-btn" style="background:#059669" onclick="uploadOneToDrive(this.closest('tr').dataset.name)" title="Subir a Drive">☁</button>` : ""}
             <button class="del-btn" onclick="deleteFile(this.closest('tr').dataset.name)">🗑</button>
           </td>
         </tr>`;
@@ -679,6 +821,7 @@ function renderLibrary() {
     el.innerHTML = `<div class="gallery">${libraryFiles.map(f => {
       const nameEsc = htmlEscape(f.name);
       const nameUrl = encodeURIComponent(f.name);
+      const badge   = uploadBadgeFor(f);
       return `
       <div class="gallery-card${selected.has(f.name) ? " selected" : ""}" data-name="${nameEsc}">
         <div class="gallery-thumb" onclick="handleThumbClick(this.closest('.gallery-card').dataset.name)">
@@ -695,9 +838,11 @@ function renderLibrary() {
             <span>${f.size_mb} MB</span>
           </div>
           <div class="gallery-meta" style="margin-top:2px">${f.date}</div>
+          ${badge ? `<div style="margin-top:6px">${badge}</div>` : ""}
           <div class="gallery-actions">
             <button class="play-btn" onclick="playVideo(this.closest('.gallery-card').dataset.name)">▶ Ver</button>
             <a class="dl-btn" href="/download/${nameUrl}">↓ Descargar</a>
+            ${driveOn ? `<button class="play-btn" style="background:#059669" onclick="uploadOneToDrive(this.closest('.gallery-card').dataset.name)" title="Subir a Drive">☁</button>` : ""}
             <button class="del-btn" onclick="deleteFile(this.closest('.gallery-card').dataset.name)">🗑</button>
           </div>
         </div>
@@ -906,7 +1051,7 @@ function toggleCard(id) {
 }
 
 // Restaurar estado colapsado desde localStorage
-["lib", "cfg"].forEach(id => {
+["lib", "up", "cfg"].forEach(id => {
   if (localStorage.getItem("card-" + id + "-collapsed") === "true") {
     document.getElementById("body-" + id)?.classList.add("collapsed");
     document.getElementById("toggle-" + id)?.classList.add("collapsed");
@@ -945,6 +1090,8 @@ async function loadConfig() {
     document.getElementById("cfg-min-seg-secs").value           = c.min_segment_secs ?? 2;
     document.getElementById("val-min-seg-secs").textContent     = c.min_segment_secs ?? 2;
     setAudioDeviceValue(c.audio_device ?? "hw:0,0");
+    document.getElementById("cfg-drive-remote").value = c.drive_remote ?? "drive";
+    document.getElementById("cfg-drive-auto-delete").checked = !!c.drive_auto_delete_after_upload;
     onAutoSegChange();
     onAudioSilenceChange();
     // Carga inicial de dispositivos detectados (silenciosa si falla)
@@ -1037,6 +1184,8 @@ async function saveConfig() {
     audio_rms_db:       parseInt(document.getElementById("cfg-audio-rms-db").value),
     min_segment_secs:   parseInt(document.getElementById("cfg-min-seg-secs").value),
     audio_device:       audioDevice,
+    drive_remote:       document.getElementById("cfg-drive-remote").value.trim(),
+    drive_auto_delete_after_upload: document.getElementById("cfg-drive-auto-delete").checked,
   };
   window._lastCfg = payload;
   try {
@@ -1057,10 +1206,232 @@ async function saveConfig() {
 }
 
 window._lastCfg = {};
+
+// ── Google Drive integration ─────────────────────────────────────────────────
+let _driveStatus = null;
+let _driveJobs   = [];
+let _pickerPath  = "";
+let _pickerFiles = [];        // files a subir cuando se confirma el picker
+
+function fmtBytes(n) {
+  if (n == null || isNaN(n)) return "—";
+  if (n < 1024) return n + " B";
+  if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + " MB";
+  return (n/(1024*1024*1024)).toFixed(2) + " GB";
+}
+
+async function fetchDriveStatus() {
+  try {
+    const r = await fetch("/api/drive/status");
+    _driveStatus = await r.json();
+  } catch (e) { _driveStatus = { available: false, error: "offline" }; }
+  renderDriveBanner();
+  renderDriveStatusRow();
+  updateBulkBar();
+}
+
+function renderDriveBanner() {
+  const slot = document.getElementById("drive-banner-slot");
+  if (!slot || !_driveStatus) return;
+  if (_driveStatus.available) { slot.innerHTML = ""; return; }
+  let msg;
+  if (!_driveStatus.rclone_installed) {
+    msg = `<strong>rclone no instalado.</strong> Reconstruye el contenedor con la nueva imagen (incluye rclone) o instala <code>apt install rclone</code> en el host.`;
+  } else if (!_driveStatus.rcd_running) {
+    msg = `<strong>rclone rcd no corre.</strong> Esperando arranque automático…`;
+  } else if (!_driveStatus.remote) {
+    msg = `<strong>Remote de Drive no configurado.</strong> Define el nombre del remote en la sección Configuración → Google Drive.`;
+  } else {
+    msg = `<strong>Drive no disponible.</strong> Ejecuta <code>rclone config</code> en el host para autorizar el remote <code>${htmlEscape(_driveStatus.remote)}</code>, y reinicia el contenedor. Detalle: ${htmlEscape(_driveStatus.error || "sin detalles")}`;
+  }
+  slot.innerHTML = `<div class="drive-banner warn">☁ ${msg}</div>`;
+}
+
+function renderDriveStatusRow() {
+  const row = document.getElementById("drive-status-row");
+  if (!row) return;
+  if (!_driveStatus) { row.innerHTML = ""; return; }
+  const ok  = _driveStatus.available;
+  const dot = ok ? `<span class="ok">●</span> conectado`
+                 : `<span class="bad">●</span> no disponible`;
+  const rem = _driveStatus.remote ? `remote: <code>${htmlEscape(_driveStatus.remote)}</code>` : "";
+  const free = (_driveStatus.free_gb != null)
+    ? `libre: ${_driveStatus.free_gb} GB / ${_driveStatus.total_gb ?? "?"} GB` : "";
+  const del = _driveStatus.auto_delete
+    ? `<span class="warn">auto-borrado local activo</span>` : "";
+  row.innerHTML = [dot, rem, free, del].filter(Boolean).join(" · ");
+}
+
+async function fetchDriveJobs() {
+  try {
+    const r = await fetch("/api/drive/jobs");
+    const d = await r.json();
+    _driveJobs = d.jobs || [];
+  } catch (e) { _driveJobs = []; }
+  renderUploadsCard();
+}
+
+function renderUploadsCard() {
+  const card = document.getElementById("uploads-card");
+  const list = document.getElementById("uploads-list");
+  if (!card || !list) return;
+  if (!_driveJobs.length) {
+    card.style.display = "none";
+    list.innerHTML = "";
+    return;
+  }
+  card.style.display = "";
+  // Ordenar: activos primero, luego por created_at desc
+  const rank = s => ({ uploading:0, queued:1, failed:2, canceled:3, done:4 }[s] ?? 9);
+  const sorted = [..._driveJobs].sort((a,b) =>
+    rank(a.status) - rank(b.status) || (b.created_at||"").localeCompare(a.created_at||""));
+  list.innerHTML = sorted.map(j => {
+    const pct = Math.max(0, Math.min(100, Math.round(j.progress || 0)));
+    const dest = j.destination || "(raíz)";
+    const speed = j.status === "uploading" && j.speed_bps
+      ? ` · ${fmtBytes(j.speed_bps)}/s` : "";
+    const statusTxt = ({
+      queued: "en cola", uploading: `subiendo ${pct}%${speed}`,
+      done: "✓ completado", failed: "⚠ error", canceled: "cancelado",
+    })[j.status] || j.status;
+    const progress = `<progress max="100" value="${pct}"></progress>`;
+    const actions = (j.status === "queued" || j.status === "uploading")
+      ? `<div class="upload-row-actions"><button class="upload-cancel" onclick="cancelUpload('${j.id}')">Cancelar</button></div>`
+      : (j.status === "failed" ? `<div class="upload-row-actions"><button class="upload-retry" onclick="retryUpload('${j.id}')">Reintentar</button></div>` : "");
+    const err = j.error ? `<div class="upload-row-dest" style="color:#fca5a5">${htmlEscape(j.error)}</div>` : "";
+    return `<div class="upload-row ${j.status}">
+      <div class="upload-row-head">
+        <div style="flex:1;min-width:0">
+          <div class="upload-row-name">${htmlEscape(j.filename)}</div>
+          <div class="upload-row-dest">→ ${htmlEscape(j.remote)}:${htmlEscape(dest)}</div>
+          ${err}
+        </div>
+        <div class="upload-row-status">${statusTxt}</div>
+      </div>
+      ${progress}
+      ${actions}
+    </div>`;
+  }).join("");
+}
+
+// ── Folder picker ────────────────────────────────────────────────────────────
+async function openFolderPicker(files) {
+  if (!_driveStatus || !_driveStatus.available) {
+    alert("Drive no está disponible. Revisa la configuración de rclone.");
+    return;
+  }
+  _pickerFiles = files;
+  _pickerPath = localStorage.getItem("vhs_drive_last_path") || "";
+  document.getElementById("picker-modal").classList.add("open");
+  await loadPickerPath(_pickerPath);
+}
+
+function closePicker() {
+  document.getElementById("picker-modal").classList.remove("open");
+  _pickerFiles = [];
+}
+
+async function loadPickerPath(path) {
+  _pickerPath = path || "";
+  renderPickerCrumb();
+  const list = document.getElementById("picker-list");
+  list.innerHTML = `<div class="picker-empty">Cargando…</div>`;
+  try {
+    const r = await fetch(`/api/drive/folders?path=${encodeURIComponent(_pickerPath)}`);
+    const d = await r.json();
+    if (!d.ok) { list.innerHTML = `<div class="picker-empty">${htmlEscape(d.msg || "Error")}</div>`; return; }
+    if (!d.folders.length) {
+      list.innerHTML = `<div class="picker-empty">(sin subcarpetas — puedes subir aquí o crear una nueva)</div>`;
+      return;
+    }
+    list.innerHTML = d.folders.map(f =>
+      `<div class="picker-item" onclick="loadPickerPath('${htmlEscape(f.path).replace(/'/g, "&#39;")}')">📁 ${htmlEscape(f.name)}</div>`
+    ).join("");
+  } catch (e) {
+    list.innerHTML = `<div class="picker-empty">Error de red</div>`;
+  }
+}
+
+function renderPickerCrumb() {
+  const crumb = document.getElementById("picker-crumb");
+  const segs = _pickerPath ? _pickerPath.split("/") : [];
+  let acc = "";
+  const parts = [`<span class="seg" onclick="loadPickerPath('')">${htmlEscape((_driveStatus && _driveStatus.remote) || "drive")}:</span>`];
+  segs.forEach(s => {
+    acc = acc ? acc + "/" + s : s;
+    parts.push(`<span>/</span><span class="seg" onclick="loadPickerPath('${htmlEscape(acc).replace(/'/g, "&#39;")}')">${htmlEscape(s)}</span>`);
+  });
+  crumb.innerHTML = parts.join(" ");
+}
+
+async function pickerCreateFolder() {
+  const name = document.getElementById("picker-new-name").value.trim();
+  if (!name) return;
+  const r = await fetch("/api/drive/mkdir", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ parent: _pickerPath, name }),
+  });
+  const d = await r.json();
+  if (!d.ok) { alert(d.msg || "Error creando carpeta"); return; }
+  document.getElementById("picker-new-name").value = "";
+  await loadPickerPath(d.path);
+}
+
+async function pickerConfirm() {
+  if (!_pickerFiles.length) { closePicker(); return; }
+  localStorage.setItem("vhs_drive_last_path", _pickerPath);
+  const r = await fetch("/api/drive/upload", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ files: _pickerFiles, destination: _pickerPath }),
+  });
+  const d = await r.json();
+  closePicker();
+  if (d.errors && d.errors.length) {
+    alert("Errores:\n" + d.errors.map(e => `• ${e.file}: ${e.msg}`).join("\n"));
+  }
+  await fetchDriveJobs();
+}
+
+async function uploadOneToDrive(name) {
+  await openFolderPicker([name]);
+}
+
+async function uploadSelectedToDrive() {
+  const files = [...selected];
+  if (!files.length) return;
+  await openFolderPicker(files);
+}
+
+async function cancelUpload(jobId) {
+  await fetch(`/api/drive/jobs/${jobId}/cancel`, { method: "POST" });
+  await fetchDriveJobs();
+}
+
+async function retryUpload(jobId) {
+  await fetch(`/api/drive/jobs/${jobId}/retry`, { method: "POST" });
+  await fetchDriveJobs();
+}
+
+// Job polling rate: 1s cuando hay activos, 10s cuando no
+let _jobsPollTimer = null;
+function tickDriveJobs() {
+  fetchDriveJobs().then(() => {
+    const active = _driveJobs.some(j => j.status === "queued" || j.status === "uploading");
+    clearTimeout(_jobsPollTimer);
+    _jobsPollTimer = setTimeout(tickDriveJobs, active ? 1000 : 10000);
+  });
+}
+
 setInterval(fetchStatus,  1000);
 setInterval(fetchLibrary, 5000);
+setInterval(fetchDriveStatus, 30000);
 fetchStatus();
 fetchLibrary();
+fetchDriveStatus();
+tickDriveJobs();
 loadConfig();
 </script>
 </body>

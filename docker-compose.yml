@@ -15,6 +15,9 @@ services:
     volumes:
       - /mnt/vhs-disk/vhs-captures:/mnt/vhs-disk/vhs-captures
       - ./config.json:/app/config.json
+      # rclone OAuth config: ejecuta `rclone config` en el host una vez,
+      # dejando la config en /root/.config/rclone/rclone.conf
+      - /root/.config/rclone:/root/.config/rclone
     cpu_shares: 1024
     ulimits:
       rtprio: 99

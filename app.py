@@ -1,4 +1,5 @@
-import glob, io, json, os, queue, re, shutil, subprocess, threading, time, zipfile
+import glob, io, json, os, queue, re, shutil, subprocess, threading, time, uuid, zipfile
+import urllib.request, urllib.error
 import numpy as np
 from datetime import datetime
 from flask import Flask, jsonify, render_template, Response, send_file, request
@@ -34,6 +35,8 @@ config = {
     "audio_rms_db":        -35,    # dBFS por encima del cual el audio se considera activo (-60 a 0)
     "min_segment_secs":    2,      # duración mínima de un segmento para guardarlo
     "audio_device":       "hw:0,0",# dispositivo ALSA — ej: hw:0,0, plughw:1,0, default
+    "drive_remote":       "drive", # nombre del remote rclone (ver `rclone listremotes`)
+    "drive_auto_delete_after_upload": False,  # borrar MP4 local tras subida verificada
 }
 
 # Regex de validación para audio_device (evita typos; no es protección contra
@@ -994,6 +997,7 @@ def api_library():
             "size_mb":  round(os.path.getsize(f) / 1_048_576, 1),
             "date":     datetime.fromtimestamp(os.path.getmtime(f)).strftime("%Y-%m-%d %H:%M"),
             "duration": get_duration(f),
+            "uploads":  _uploads_for(os.path.basename(f)),
         }
         for f in files
     ])
@@ -1083,6 +1087,467 @@ def download_bulk():
                      as_attachment=True, download_name="vhs_seleccion.zip")
 
 
+# ── Google Drive uploads via rclone rcd ────────────────────────────────────────
+#
+# Modelo:
+#   - Un rclone rcd (remote control daemon) corre en 127.0.0.1:5572, iniciado por
+#     la app al arrancar. Sobrevive reinicios de Flask en Docker vía restart policy.
+#   - Cada subida es un UploadJob en memoria (_upload_jobs) con progreso en vivo
+#     obtenido via /job/status de rclone rcd.
+#   - Al completarse, se persiste una entrada en UPLOADS_FILE (.uploads.json) para
+#     que la UI sepa si un archivo ya fue subido tras reiniciar la app.
+#   - Si el usuario activó drive_auto_delete_after_upload, el MP4 local se borra
+#     tras verificar que rclone reportó éxito (el propio copyfile hace checksum).
+#
+RCLONE_RC_ADDR  = "127.0.0.1:5572"
+RCLONE_RC_URL   = f"http://{RCLONE_RC_ADDR}"
+UPLOADS_FILE    = os.path.join(OUTPUT_DIR, ".uploads.json")
+
+_rclone_rcd_proc   = None
+_rclone_rcd_lock   = threading.Lock()
+_upload_jobs       = {}          # {job_id: dict}  — jobs en memoria (todos los estados)
+_upload_jobs_lock  = threading.Lock()
+_upload_history    = {}          # {filename: [ {destination, remote, uploaded_at, size_bytes} ]}
+_upload_history_lock = threading.Lock()
+_drive_available   = False       # se actualiza periódicamente
+
+
+def _load_upload_history():
+    global _upload_history
+    if not os.path.exists(UPLOADS_FILE):
+        _upload_history = {}
+        return
+    try:
+        with open(UPLOADS_FILE) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _upload_history = data
+    except Exception:
+        _upload_history = {}
+
+
+def _save_upload_history():
+    tmp = UPLOADS_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(_upload_history, f, indent=2)
+        os.replace(tmp, UPLOADS_FILE)
+    except Exception:
+        pass
+
+
+_load_upload_history()
+
+
+def _rclone_rc(endpoint: str, payload: dict = None, timeout: float = 15.0) -> dict:
+    """
+    POST a la API de rclone rcd. Retorna el dict JSON de la respuesta, o lanza
+    RuntimeError con el mensaje de error para que el caller decida cómo reportar.
+    """
+    body = json.dumps(payload or {}).encode("utf-8")
+    req  = urllib.request.Request(
+        f"{RCLONE_RC_URL}/{endpoint.lstrip('/')}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read().decode("utf-8") or "{}").get("error", "")
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"rclone rcd {endpoint} -> HTTP {e.code}: {detail or e.reason}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"rclone rcd no disponible ({e.reason})")
+
+
+def _rclone_binary_present() -> bool:
+    return shutil.which("rclone") is not None
+
+
+def _start_rclone_rcd():
+    """Lanza rclone rcd como subproceso. No falla si rclone no está instalado."""
+    global _rclone_rcd_proc
+    if not _rclone_binary_present():
+        return False
+    with _rclone_rcd_lock:
+        if _rclone_rcd_proc and _rclone_rcd_proc.poll() is None:
+            return True
+        try:
+            _rclone_rcd_proc = subprocess.Popen(
+                ["rclone", "rcd",
+                 "--rc-addr", RCLONE_RC_ADDR,
+                 "--rc-no-auth",
+                 "--log-level", "INFO"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+        except Exception:
+            _rclone_rcd_proc = None
+            return False
+    # Esperar a que el puerto responda
+    for _ in range(30):
+        try:
+            _rclone_rc("rc/noop", timeout=1.0)
+            return True
+        except Exception:
+            time.sleep(0.2)
+    return False
+
+
+def _drive_reachable() -> bool:
+    """True si rcd responde Y el remote configurado lista (auth OK)."""
+    remote = (config.get("drive_remote") or "").strip()
+    if not remote:
+        return False
+    try:
+        _rclone_rc("operations/about", {"fs": f"{remote}:"}, timeout=8.0)
+        return True
+    except Exception:
+        return False
+
+
+def _drive_watchdog():
+    """Revisa periódicamente disponibilidad de rclone y reinicia rcd si murió."""
+    global _drive_available
+    while True:
+        try:
+            if _rclone_binary_present():
+                if not (_rclone_rcd_proc and _rclone_rcd_proc.poll() is None):
+                    _start_rclone_rcd()
+                _drive_available = _drive_reachable()
+            else:
+                _drive_available = False
+        except Exception:
+            _drive_available = False
+        time.sleep(15)
+
+
+# Arranque del rcd (no fatal)
+threading.Thread(target=_start_rclone_rcd, daemon=True).start()
+threading.Thread(target=_drive_watchdog,  daemon=True).start()
+
+
+# ── Validación de paths de Drive ──────────────────────────────────────────────
+def _sanitize_drive_path(path: str) -> str:
+    """
+    Normaliza el path destino en Drive: sin barras iniciales, sin ..,
+    sin caracteres de control. Puede ser string vacío = raíz del Drive.
+    """
+    if not isinstance(path, str):
+        return ""
+    p = _CONTROL_CHARS_RE.sub("", path).strip()
+    # Normalizar separadores, eliminar segmentos vacíos y ..
+    parts = [seg for seg in p.replace("\\", "/").split("/") if seg and seg != "."]
+    if any(seg == ".." for seg in parts):
+        return ""
+    return "/".join(parts)
+
+
+# ── Upload job lifecycle ──────────────────────────────────────────────────────
+def _snapshot_jobs() -> list:
+    with _upload_jobs_lock:
+        return [dict(j) for j in _upload_jobs.values()]
+
+
+def _record_upload(filename: str, remote: str, destination: str, size_bytes: int):
+    with _upload_history_lock:
+        entries = _upload_history.setdefault(filename, [])
+        entries.append({
+            "destination":  destination,
+            "remote":       remote,
+            "uploaded_at":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "size_bytes":   size_bytes,
+        })
+        _save_upload_history()
+
+
+def _uploads_for(filename: str) -> list:
+    with _upload_history_lock:
+        return list(_upload_history.get(filename, []))
+
+
+def _run_upload_job(job_id: str):
+    """Ejecuta un job: llama rclone rcd con _async=true y hace polling de progreso."""
+    with _upload_jobs_lock:
+        job = _upload_jobs.get(job_id)
+        if not job:
+            return
+        job["status"]     = "uploading"
+        job["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    filename   = job["filename"]
+    remote     = job["remote"]
+    dest_dir   = job["destination"]      # ej "Videos/VHS"
+    local_path = os.path.join(OUTPUT_DIR, filename)
+
+    if not os.path.exists(local_path):
+        with _upload_jobs_lock:
+            job["status"] = "failed"
+            job["error"]  = "Archivo local no existe"
+            job["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return
+
+    try:
+        size = os.path.getsize(local_path)
+    except OSError:
+        size = 0
+    with _upload_jobs_lock:
+        job["size_bytes"] = size
+
+    # Lanzar copyfile async. rclone rcd retorna {"jobid": N}
+    try:
+        resp = _rclone_rc("operations/copyfile", {
+            "srcFs":     OUTPUT_DIR,
+            "srcRemote": filename,
+            "dstFs":     f"{remote}:{dest_dir}" if dest_dir else f"{remote}:",
+            "dstRemote": filename,
+            "_async":    True,
+            "_group":    f"vhs/{job_id}",
+        })
+    except Exception as e:
+        with _upload_jobs_lock:
+            job["status"] = "failed"
+            job["error"]  = str(e)
+            job["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return
+
+    rclone_jobid = resp.get("jobid")
+    with _upload_jobs_lock:
+        job["rclone_jobid"] = rclone_jobid
+
+    # Polling de progreso
+    while True:
+        with _upload_jobs_lock:
+            if job.get("cancel_requested"):
+                try:
+                    _rclone_rc("job/stop", {"jobid": rclone_jobid})
+                except Exception:
+                    pass
+                job["status"] = "canceled"
+                job["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                return
+
+        try:
+            status = _rclone_rc("job/status", {"jobid": rclone_jobid})
+        except Exception as e:
+            with _upload_jobs_lock:
+                job["status"] = "failed"
+                job["error"]  = f"No se pudo consultar estado: {e}"
+                job["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return
+
+        # Progreso vía core/stats-group
+        try:
+            stats = _rclone_rc("core/stats", {"group": f"vhs/{job_id}"})
+            bytes_done  = int(stats.get("bytes", 0))
+            transferred = int(stats.get("transfers", 0))
+            with _upload_jobs_lock:
+                job["bytes_done"] = bytes_done
+                if size > 0:
+                    job["progress"] = min(100, round(bytes_done * 100 / size, 1))
+                job["speed_bps"]  = int(stats.get("speed", 0))
+        except Exception:
+            pass
+
+        if status.get("finished"):
+            success = bool(status.get("success"))
+            with _upload_jobs_lock:
+                if success:
+                    job["status"]   = "done"
+                    job["progress"] = 100.0
+                    job["bytes_done"] = size
+                else:
+                    job["status"] = "failed"
+                    job["error"]  = status.get("error") or "rclone reportó fallo"
+                job["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if success:
+                _record_upload(filename, remote, dest_dir, size)
+                if config.get("drive_auto_delete_after_upload"):
+                    try:
+                        _delete_file(filename)
+                        with _upload_jobs_lock:
+                            job["local_deleted"] = True
+                    except Exception as e:
+                        with _upload_jobs_lock:
+                            job["local_delete_error"] = str(e)
+            return
+
+        time.sleep(1.0)
+
+
+def _enqueue_upload(filename: str, destination: str) -> dict:
+    """Crea un job y lanza su worker. Valida que el archivo sea seguro."""
+    if not _safe_output_filename(filename):
+        raise ValueError(f"Archivo inválido: {filename}")
+    if not os.path.exists(os.path.join(OUTPUT_DIR, filename)):
+        raise ValueError(f"Archivo no existe: {filename}")
+
+    remote = (config.get("drive_remote") or "").strip()
+    if not remote:
+        raise ValueError("drive_remote no configurado")
+
+    dest = _sanitize_drive_path(destination)
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id":            job_id,
+        "filename":      filename,
+        "remote":        remote,
+        "destination":   dest,
+        "status":        "queued",
+        "progress":      0.0,
+        "bytes_done":    0,
+        "size_bytes":    0,
+        "speed_bps":     0,
+        "error":         "",
+        "started_at":    "",
+        "finished_at":   "",
+        "created_at":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "rclone_jobid":  None,
+        "cancel_requested": False,
+    }
+    with _upload_jobs_lock:
+        _upload_jobs[job_id] = job
+
+    threading.Thread(target=_run_upload_job, args=(job_id,), daemon=True).start()
+    return job
+
+
+# ── Drive endpoints ──────────────────────────────────────────────────────────
+@app.route("/api/drive/status")
+def api_drive_status():
+    binary = _rclone_binary_present()
+    rcd    = bool(_rclone_rcd_proc and _rclone_rcd_proc.poll() is None)
+    remote = (config.get("drive_remote") or "").strip()
+    resp = {
+        "rclone_installed": binary,
+        "rcd_running":      rcd,
+        "remote":           remote,
+        "available":        False,
+        "free_gb":          None,
+        "total_gb":         None,
+        "auto_delete":      bool(config.get("drive_auto_delete_after_upload")),
+    }
+    if binary and rcd and remote:
+        try:
+            about = _rclone_rc("operations/about", {"fs": f"{remote}:"}, timeout=6.0)
+            resp["available"] = True
+            free  = about.get("free")
+            total = about.get("total")
+            if isinstance(free, (int, float)):
+                resp["free_gb"] = round(free / 1_073_741_824, 1)
+            if isinstance(total, (int, float)):
+                resp["total_gb"] = round(total / 1_073_741_824, 1)
+        except Exception as e:
+            resp["error"] = str(e)
+    return jsonify(resp)
+
+
+@app.route("/api/drive/folders")
+def api_drive_folders():
+    remote = (config.get("drive_remote") or "").strip()
+    if not remote:
+        return jsonify({"ok": False, "msg": "drive_remote no configurado"}), 400
+    path = _sanitize_drive_path(request.args.get("path", ""))
+    try:
+        resp = _rclone_rc("operations/list", {
+            "fs":     f"{remote}:",
+            "remote": path,
+            "opt":    {"dirsOnly": True, "noModTime": True},
+        }, timeout=20.0)
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 502
+    items = [
+        {"name": it.get("Name"), "path": (path + "/" + it.get("Name")).lstrip("/")}
+        for it in resp.get("list", [])
+        if it.get("IsDir")
+    ]
+    items.sort(key=lambda x: x["name"].lower())
+    return jsonify({"ok": True, "path": path, "folders": items})
+
+
+@app.route("/api/drive/mkdir", methods=["POST"])
+def api_drive_mkdir():
+    remote = (config.get("drive_remote") or "").strip()
+    if not remote:
+        return jsonify({"ok": False, "msg": "drive_remote no configurado"}), 400
+    data = request.get_json(silent=True) or {}
+    parent = _sanitize_drive_path(data.get("parent", ""))
+    name   = _sanitize_drive_path(data.get("name", ""))
+    if not name or "/" in name:
+        return jsonify({"ok": False, "msg": "Nombre de carpeta inválido"}), 400
+    new_path = (parent + "/" + name).lstrip("/")
+    try:
+        _rclone_rc("operations/mkdir", {"fs": f"{remote}:", "remote": new_path})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 502
+    return jsonify({"ok": True, "path": new_path})
+
+
+@app.route("/api/drive/upload", methods=["POST"])
+def api_drive_upload():
+    data = request.get_json(silent=True) or {}
+    files = data.get("files") or []
+    dest  = data.get("destination", "")
+    if not isinstance(files, list) or not files:
+        return jsonify({"ok": False, "msg": "Lista de archivos vacía"}), 400
+    created, errors = [], []
+    for name in files:
+        try:
+            job = _enqueue_upload(name, dest)
+            created.append(job["id"])
+        except Exception as e:
+            errors.append({"file": name, "msg": str(e)})
+    return jsonify({"ok": not errors, "job_ids": created, "errors": errors})
+
+
+@app.route("/api/drive/jobs")
+def api_drive_jobs():
+    # Purgar jobs terminados con más de 5 min
+    cutoff = time.time() - 300
+    with _upload_jobs_lock:
+        for jid in list(_upload_jobs.keys()):
+            j = _upload_jobs[jid]
+            if j["status"] in ("done", "failed", "canceled"):
+                try:
+                    ts = datetime.strptime(j.get("finished_at", ""), "%Y-%m-%d %H:%M:%S").timestamp()
+                    if ts < cutoff:
+                        del _upload_jobs[jid]
+                except Exception:
+                    pass
+    return jsonify({"jobs": _snapshot_jobs()})
+
+
+@app.route("/api/drive/jobs/<job_id>/cancel", methods=["POST"])
+def api_drive_cancel(job_id):
+    with _upload_jobs_lock:
+        job = _upload_jobs.get(job_id)
+        if not job:
+            return jsonify({"ok": False, "msg": "Job no encontrado"}), 404
+        if job["status"] in ("done", "failed", "canceled"):
+            return jsonify({"ok": False, "msg": "Job ya finalizado"}), 400
+        job["cancel_requested"] = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/drive/jobs/<job_id>/retry", methods=["POST"])
+def api_drive_retry(job_id):
+    with _upload_jobs_lock:
+        job = _upload_jobs.get(job_id)
+    if not job:
+        return jsonify({"ok": False, "msg": "Job no encontrado"}), 404
+    try:
+        new_job = _enqueue_upload(job["filename"], job["destination"])
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+    return jsonify({"ok": True, "job_id": new_job["id"]})
+
+
 @app.route("/api/config", methods=["GET"])
 def get_config():
     return jsonify(config)
@@ -1111,6 +1576,8 @@ def set_config():
         "audio_rms_db":        int,
         "min_segment_secs":    int,
         "audio_device":        str,
+        "drive_remote":        str,
+        "drive_auto_delete_after_upload": bool,
     }
     valid_presets  = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium"}
     valid_bitrates = {"96k", "128k", "192k", "320k"}
@@ -1156,6 +1623,12 @@ def set_config():
             val = val.strip()
             if val and not _AUDIO_DEVICE_RE.match(val):
                 errors.append("audio_device inválido: usa hw:N,M, plughw:N,M o default")
+            else:
+                config[key] = val
+        elif key == "drive_remote":
+            val = val.strip()
+            if val and not re.match(r"^[A-Za-z0-9_\-]+$", val):
+                errors.append("drive_remote inválido: solo letras, números, guión y guión bajo")
             else:
                 config[key] = val
         else:
